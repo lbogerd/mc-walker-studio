@@ -16,7 +16,8 @@ function setupCanvas(canvas) {
 
 /**
  * Footfall diagram for one walker: one row per leg, filled = planted, over a window of
- * ±1 gait cycle around the current tick.
+ * ±1 full-speed gait cycle around the current tick. Vertical lines mark where the gait clock starts
+ * a new cycle; they spread out when the walker slows down and stop while it stands.
  */
 export function drawGait(canvas, run, t) {
   const { g, w, h } = setupCanvas(canvas);
@@ -32,11 +33,13 @@ export function drawGait(canvas, run, t) {
   const X = (tt) => x0 + ((tt - t0) / (t1 - t0)) * (x1 - x0);
   g.font = '11px ui-monospace, SFMono-Regular, Menlo, monospace';
   g.textBaseline = 'middle';
-  // cycle boundaries
+  // cycle boundaries (from the gait clock, which runs slower when the walker is slow and stops at rest)
   g.strokeStyle = css('--grid');
   g.lineWidth = 1;
-  for (let c = Math.ceil(t0 / T); c * T <= t1; c++) {
-    const x = Math.round(X(c * T)) + 0.5;
+  for (let tt = Math.max(1, Math.ceil(t0)); tt <= Math.floor(t1) && tt < frames.length; tt++) {
+    const a = frames[tt - 1].phase, b = frames[tt].phase;
+    if (a === undefined || b === undefined || Math.floor(b + 1e-9) === Math.floor(a + 1e-9)) continue;
+    const x = Math.round(X(tt)) + 0.5;
     g.beginPath(); g.moveTo(x, top); g.lineTo(x, top + rows * rowH); g.stroke();
   }
   spec.legs.forEach((leg, li) => {
@@ -72,7 +75,7 @@ export function drawGait(canvas, run, t) {
   g.beginPath(); g.moveTo(cx, top - 2); g.lineTo(cx, top + rows * rowH + 2); g.stroke();
   g.fillStyle = css('--text-3');
   g.textAlign = 'center';
-  g.fillText(`±1 cycle (${T.toFixed(1)} ticks) · bars = foot planted`, (x0 + x1) / 2, h - bottom / 2);
+  g.fillText(`±${T.toFixed(1)} ticks (1 cycle at full speed) · bars = foot planted`, (x0 + x1) / 2, h - bottom / 2);
 }
 
 export const TIMELINE_METRICS = {
@@ -82,6 +85,9 @@ export const TIMELINE_METRICS = {
   footErr: { label: 'Foot slip', unit: 'b', key: 'footErr', target: 'footErrorMax' },
   stance: { label: 'Feet planted', unit: '', key: 'stance', target: 'stanceMin', step: true },
   clearance: { label: 'Hull clearance', unit: 'b', key: 'clearance' },
+  speed: { label: 'Ground speed', unit: 'b/s', key: 'speed' },
+  torque: { label: 'Righting torque', unit: 'mass·b', key: 'torque' },
+  trackErr: { label: 'Hull tracking', unit: 'b', key: 'trackErr' },
 };
 
 /** Timeline of one metric for every walker over the whole run. Returns a hit-test helper. */

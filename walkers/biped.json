@@ -1,11 +1,17 @@
 {
   "name": "Biped",
-  "description": "Two-legged mech. Never statically stable; only works if the controller holds the hull. Useful as a stress test for the kinematic-support decision.",
+  "description": "Two-legged mech. Never statically stable: it stands on one foot for most of the cycle, so it needs a big Gyro Stabilizer. A stress test for the stabilizer model.",
   "color": "#9085e9",
   "proposal": {
-    "summary": "Iconic but demanding: shows what 'kinematic support' has to cover.",
-    "decisions": ["No foothold search: shows raw foot placement on stairs and trenches."],
-    "openQuestions": ["Should bipeds be allowed at all?"]
+    "summary": "Iconic but demanding: shows how much a Gyro Stabilizer has to cover when the walker is never statically stable.",
+    "decisions": [
+      "Gyro Stabilizer rated 120 mass·b for a 58-mass walker: it needs 107 mass·b (centre of mass 1.84 b from the single planted foot), about 1.8× its own mass, against 1.1× for the Quad Strider.",
+      "No foothold search: shows raw foot placement on stairs and trenches."
+    ],
+    "openQuestions": [
+      "Should bipeds be allowed at all, or only with a stabilizer this large?",
+      "With 0 feet planted (trench) no stabilizer can help: should the mod refuse such steps?"
+    ]
   },
   "body": { "size": [4, 4, 3], "rideHeight": 5, "blocks": 40 },
   "legDefaults": { "segments": [3, 3], "knee": "forward" },
@@ -14,6 +20,6 @@
   ],
   "gait": { "preset": "alternating", "duty": 0.6, "stride": 3.5, "stepHeight": 1.3, "swing": "arc", "bodyAdapt": "level" },
   "drive": { "rpm": 40, "revsPerCycle": 1 },
-  "physics": { "support": "kinematic" },
+  "physics": { "stabilizer": { "maxTorque": 120, "stressPerTorque": 2 } },
   "implementation": { "legRepresentation": "contraption" }
 }

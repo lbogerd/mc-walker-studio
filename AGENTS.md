@@ -35,13 +35,13 @@ Units are Minecraft units throughout: **blocks (b)**, **ticks** (20 per second),
 | param | values | |
 |---|---|---|
 | `walkers` | comma list of ids, max 3 | one lane per walker, compared side by side |
-| `terrain` | `flat` `stairs` `ledge` `hill` `gap` `rough` | test course |
+| `terrain` | `flat` `stairs` `ledge` `hill` `gap` `rough` `turn` `startstop` `reverse` | test course (the last three are flat and drive a throttle/steer timeline) |
 | `focus` | lane index | which walker the camera, gait chart and Design/Tweak tabs follow |
 | `cam` | `iso` `side` `front` `top` `chase` | camera preset |
 | `t` + `paused=1` | tick | freeze on a specific tick (good for screenshots of a failure) |
 | `speed` | `0.1` … `4` | playback speed |
 | `tab` | `metrics` `design` `tweak` `events` `model` | side panel tab |
-| `metric` | `margin` `bodyY` `reach` `footErr` `stance` `clearance` | timeline chart |
+| `metric` | `margin` `bodyY` `reach` `footErr` `stance` `clearance` `speed` `torque` `trackErr` | timeline chart |
 | `hud=0` | | hide all UI chrome, viewport only (press `h` to toggle) |
 
 ## Driving the page from a browser tool
@@ -69,7 +69,7 @@ walkerStudio.screenshot();              // PNG data URL of the 3D view
 | change what counts as "good enough" for everyone | `config/targets.json` (team-wide; say so in your PR) |
 | change the bar for one walker only | `"targets"` block inside that walker (shown with a `*`) |
 | calibrate server-cost estimates against real profiles | `config/cost-model.json`, then set `"calibrated": true` |
-| add a test course | `src/sim/terrain.js` → `SCENARIOS` |
+| add a test course (terrain and/or a throttle/steer `commands` timeline) | `src/sim/terrain.js` → `SCENARIOS` |
 | change how the walking loop works (gait, IK, foothold search, sway) | `src/sim/simulate.js`; keep `npm test` green |
 
 The simulation core in `src/sim/` is plain ES modules shared by the page and the CLI. Keep it free of DOM
@@ -105,8 +105,11 @@ change, work around it in `mod/` (e.g. a mixin) and tell the user.
 
 - Don't loosen `config/targets.json` just to make your walker pass. Override targets in the walker and
   explain why in `proposal.decisions`.
-- `physics.support: "kinematic"` means "the controller holds the hull, so it can't tip". Stability then only
-  *warns*. That is a design decision the team hasn't settled yet, so don't treat it as a free pass. Call it
-  out in `openQuestions`.
+- A walker that isn't statically stable needs a Gyro Stabilizer (`physics.stabilizer`, decision D6). Size its
+  `maxTorque` from the "Peak righting torque" metric with honest headroom, and remember that it costs stress
+  (included in the Stress total). Don't oversize it just to make the stability row pass on a course where
+  the walker falls into a trench. Say what you sized it for in `proposal.decisions`.
+- Check the motion courses (`turn`, `startstop`, `reverse`) as well as the terrain ones: v1 must turn,
+  reverse and stop (D4).
 - Server numbers stay warnings until the cost model is calibrated. Don't quote them as measurements.
-- See `docs/model.md` for what the sandbox does not model (turning, leg-vs-hull collisions, real physics).
+- See `docs/model.md` for what the sandbox does not model (strafing, leg-vs-hull collisions, real physics).

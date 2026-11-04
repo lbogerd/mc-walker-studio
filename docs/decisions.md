@@ -93,10 +93,17 @@ need a stabilizer. A walker that deliberately trades speed for stability overrid
 
 ## Follow-up work these decisions create
 
-1. Studio: add turning, reverse, start/stop and acceleration (D4), plus courses for them.
+1. Studio: add turning, reverse, start/stop and acceleration (D4), plus courses for them. *Done: command
+   timelines, the `turn` / `startstop` / `reverse` courses, `gait.accel`.*
 2. Studio: replace `physics.support` with the stabilizer model (D6), and model suspension tracking error (D1).
-3. Studio: switch the example walkers to `legRepresentation: "contraption"` (D2).
-4. Mod: compile against Simulated's nested jars (D5).
+   *Done: `physics.stabilizer`, `physics.suspension`.*
+3. Studio: switch the example walkers to `legRepresentation: "contraption"` (D2). *Done; it's also the default.*
+4. Mod: compile against Simulated's nested jars (D5). *Done: `extractNestedJars` in `mod/build.gradle`;
+   `SimulatedControls` reads the Steering Wheel and Throttle Lever (game test `readsSimulatedControls`).*
 5. Mod spike: a game test that assembles a hull sub-level and holds it up with spring impulses at four
-   points (D1). This is the riskiest piece, so it comes first.
-6. Mod spike: a Create contraption leg attached to a moving sub-level (D2).
+   points (D1). This is the riskiest piece, so it comes first. *Done, works: the hull holds at 3.02 b (target 3.0)
+   level, 0.6° under a heavy corner load, and recovers from a 4 m/s shove to within 0.001 b. See
+   `mod/README.md`, "Spike findings".*
+6. Mod spike: a Create contraption leg attached to a moving sub-level (D2). *Done, works: a bearing-driven
+   arm assembled inside the hull's plot is a colliding Sable kinematic body that follows the hull, and it
+   knocks a free block 5.2 b (control without the leg: 0.002 b).*

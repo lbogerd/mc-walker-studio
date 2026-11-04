@@ -40,3 +40,6 @@ Build-your-own walkers for Create: Aeronautics, on top of Sable sub-levels.
     versionRange="*"
     ordering="AFTER"
     side="BOTH"
+
+[[mixins]]
+config="walkers.mixins.json"

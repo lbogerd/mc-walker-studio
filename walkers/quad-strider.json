@@ -1,15 +1,17 @@
 {
   "name": "Quad Strider",
-  "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; relies on the mod holding the hull kinematically because two feet down is never statically stable.",
+  "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; two feet down is never statically stable, so it carries a Gyro Stabilizer.",
   "color": "#3987e5",
   "proposal": {
-    "summary": "Fast travel walker. Trades static stability for ~3 b/s.",
+    "summary": "Fast travel walker. Trades static stability for ~3 b/s and pays for it with a Gyro Stabilizer (D6).",
     "decisions": [
-      "Hull is held kinematically by the walker controller (Sable body does not tip).",
+      "Gyro Stabilizer rated 160 mass·b: the trot needs up to 142 mass·b (steep hill, margin −1.13 b × 126 mass), so ~13% headroom. That adds up to ~285 SU on top of the 1070 SU drive.",
+      "Legs are Create contraptions (D2).",
       "Front knees bend back, hind knees bend forward, for a readable silhouette."
     ],
     "openQuestions": [
-      "Is kinematic support acceptable, or must every walker be statically stable?",
+      "Stabilizer stress per torque (2 SU per mass·b) is a placeholder until the block exists. Is ~25% extra stress the right price for a trot?",
+      "Suspension at the default 2 Hz / ζ 0.7 lags enough on the 2-block ledge to push reach from 93% to 96% (fail). 4 Hz gets it back to 94% with slightly more bob. What leg spring gain will the mod actually reach?",
       "Do we want automatic foothold search on by default?"
     ]
   },
@@ -21,6 +23,6 @@
   ],
   "gait": { "preset": "alternating", "duty": 0.55, "stride": 4, "stepHeight": 1.4, "swing": "arc", "bodyAdapt": "pitch", "footholdSearch": { "radius": 1 } },
   "drive": { "rpm": 48, "revsPerCycle": 1 },
-  "physics": { "support": "kinematic" },
-  "implementation": { "legRepresentation": "renderOnly", "syncEveryTicks": 1 }
+  "physics": { "stabilizer": { "maxTorque": 160, "stressPerTorque": 2 }, "suspension": { "frequency": 2, "damping": 0.7 } },
+  "implementation": { "legRepresentation": "contraption", "syncEveryTicks": 1 }
 }

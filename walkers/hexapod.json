@@ -4,8 +4,8 @@
   "color": "#199e70",
   "proposal": {
     "summary": "All-terrain workhorse: wide stance, low hull, tripod gait.",
-    "decisions": ["3-segment legs (coxa/femur/tibia) with knees pointing up and out."],
-    "openQuestions": ["Six legs × 3 segments: what does that cost as sub-levels vs render-only?"]
+    "decisions": ["3-segment legs (coxa/femur/tibia) with knees pointing up and out.", "Tripod keeps three feet down, so no Gyro Stabilizer is needed (D6)."],
+    "openQuestions": ["Six legs × 3 segments as contraptions (D2): 18 contraption segments is the most of any example. Does that fit the server budget once calibrated?"]
   },
   "body": { "size": [7, 2, 5], "rideHeight": 2.5, "blocks": 70 },
   "legDefaults": { "segments": [1, 2.5, 3], "knee": "out" },
@@ -16,6 +16,6 @@
   ],
   "gait": { "preset": "alternating", "duty": 0.55, "stride": 2.6, "stepHeight": 1.2, "swing": "box", "bodyAdapt": "pitch", "footholdSearch": { "radius": 1 } },
   "drive": { "rpm": 40, "revsPerCycle": 1 },
-  "physics": { "support": "static" },
-  "implementation": { "legRepresentation": "renderOnly" }
+  "physics": { "stabilizer": null },
+  "implementation": { "legRepresentation": "contraption" }
 }

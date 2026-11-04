@@ -24,6 +24,15 @@ repositories {
         forRepository { maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' } }
         filter { includeGroup 'maven.modrinth' }
     }
+    // Create's own maven: compile-only copies of libraries Create nests in its jar (Ponder, Flywheel).
+    exclusiveContent {
+        forRepository { maven { name = 'CreateMod'; url = 'https://maven.createmod.net' } }
+        filter { includeGroup 'net.createmod.ponder'; includeGroup 'dev.engine-room.flywheel' }
+    }
+    exclusiveContent {
+        forRepository { maven { name = 'Registrate'; url = 'https://maven.ithundxr.dev/snapshots' } }
+        filter { includeGroup 'com.tterrag.registrate' }
+    }
 }
 
 sourceSets.main.resources {
@@ -78,13 +87,47 @@ neoForge {
     }
 }
 
+configurations {
+    // Release jars we only unpack nested jars from (see extractNestedJars).
+    nestedJarSources {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
+// Aeronautics ships as a bundle whose real code (Simulated, Aeronautics, Offroad) lives in nested
+// META-INF/jarjar/*.jar files, and Sable nests its math API (sable-companion) and Veil the same way.
+// javac can't see inside nested jars, so unpack them for compileOnly use. At runtime NeoForge loads the
+// outer jars itself.
+def archives = services.get(ArchiveOperations)
+def extractNestedJars = tasks.register('extractNestedJars', Sync) {
+    from(configurations.nestedJarSources.elements.map { files -> files.collect { archives.zipTree(it.asFile) } }) {
+        include 'META-INF/jarjar/*.jar'
+        eachFile { it.path = it.name }
+    }
+    includeEmptyDirs = false
+    into layout.buildDirectory.dir('nested-jars')
+}
+
 dependencies {
     implementation "maven.modrinth:create:${create_version}"
     implementation "maven.modrinth:sable:${sable_version}"
-    // The Aeronautics release is a bundle; its classes (Simulated, Aeronautics, Offroad) live in nested jars,
-    // so it is runtime-only for now. Extract the nested jars into compileOnly deps once we need its API.
     runtimeOnly "maven.modrinth:create-aeronautics:${aeronautics_version}"
+    nestedJarSources "maven.modrinth:create-aeronautics:${aeronautics_version}"
+    nestedJarSources "maven.modrinth:sable:${sable_version}"
+    compileOnly "net.createmod.ponder:ponder-neoforge:${ponder_version}+mc${minecraft_version}"
+    compileOnly "dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}"
+    compileOnly "com.tterrag.registrate:Registrate:${registrate_version}"
+    compileOnly files(extractNestedJars.map { it.destinationDir }).builtBy(extractNestedJars).asFileTree.matching { include '*.jar' }
 }
+
+// Game tests must start from a fresh world: Sable saves sub-levels with it, and since our tests run near
+// the origin (see GameTestServerMixin), hulls left over from earlier runs would collide with new ones.
+def cleanGameTestWorld = tasks.register('cleanGameTestWorld', Delete) {
+    delete layout.projectDirectory.dir('run/gametest/world')
+}
+tasks.matching { it.name == 'runGameTestServer' }.configureEach { dependsOn cleanGameTestWorld }
 
 var generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
     var replaceProperties = [

@@ -1,6 +1,6 @@
 // Walker Studio page controller. State lives in the URL so any view can be shared or screenshotted.
 import {
-  normalizeSpec, runScenario, runMatrix, defaultTicks, formatValue, SCENARIOS, GAIT_PRESETS,
+  normalizeSpec, runScenario, runMatrix, defaultTicks, courseTicks, formatValue, SCENARIOS, GAIT_PRESETS,
   LEG_REPRESENTATIONS, estimateCost, stress,
 } from '../sim/index.js';
 import { StudioScene } from './scene.js';
@@ -78,6 +78,7 @@ function applyTweaks(raw, patch = {}) {
   const out = structuredClone(raw);
   for (const [p, v] of Object.entries(patch)) {
     if (p === 'gait.footholdSearch') setPath(out, p, v > 0 ? { radius: v } : null);
+    else if (p === 'physics.stabilizer') setPath(out, p, v > 0 ? { ...(getPath(out, p) || {}), maxTorque: v } : null);
     else setPath(out, p, v);
   }
   return out;
@@ -100,7 +101,10 @@ function rebuild({ keepTime = true } = {}) {
   const used = new Set();
   specs.forEach((s, i) => { if (used.has(s.color)) s.color = PALETTE.find((c) => !used.has(c)) ?? s.color; used.add(s.color); });
 
-  state.ticks = specs.length ? Math.min(4000, Math.max(...specs.map(({ spec }) => defaultTicks(spec, 60)))) : 0;
+  // courses with a command timeline have a fixed length; the others run until the slowest walker covers 60 b
+  const cmds = SCENARIOS[state.terrain]?.commands;
+  state.ticks = !specs.length ? 0 : cmds ? courseTicks(specs[0].spec, cmds)
+    : Math.min(4000, Math.max(...specs.map(({ spec }) => defaultTicks(spec, 60))));
   state.runs = specs.map(({ spec, color }) => ({
     spec, color,
     result: runScenario(spec, state.terrain, state.costModel, { ticks: state.ticks }),
@@ -168,21 +172,27 @@ function renderChrome() {
 
 function syncTransport() {
   $('play').textContent = state.playing ? '⏸' : '▶';
-  const run = state.runs[state.focus];
-  const T = run?.spec.gait.cycleTicks ?? 1;
-  $('readout').textContent = `tick ${String(Math.floor(state.t)).padStart(4)} / ${state.ticks} · ${(state.t / 20).toFixed(2)} s · cycle ${(state.t / T).toFixed(2)}`;
+  const fr = scene.lanes[state.focus]?.frame;
+  const cyc = fr?.phase ?? 0;
+  $('readout').textContent = `tick ${String(Math.floor(state.t)).padStart(4)} / ${state.ticks} · ${(state.t / 20).toFixed(2)} s · cycle ${cyc.toFixed(2)}`;
 }
 
 function renderHud() {
   const sc = SCENARIOS[state.terrain];
+  let cmd = '';
   const rows = state.runs.map((run, i) => {
     const f = scene.lanes[i]?.frame;
     if (!f) return '';
+    if (sc.commands && f.cmd && !cmd) cmd = `<span class="mono">throttle ${f.cmd.throttle.toFixed(2)} · steer ${f.cmd.steer.toFixed(2)}</span>`;
     const feet = f.legs.filter((l) => l.stance).length;
+    const v = f.cmd?.v ?? 0, yr = f.cmd?.yawRate ?? 0;
+    const hdg = ((((f.body.yaw ?? 0) * 180) / Math.PI) % 360 + 360) % 360;
+    const stab = run.spec.physics.stabilizer;
+    const tq = stab ? ` · gyro ${((f.torque / stab.maxTorque) * 100).toFixed(0)}%` : '';
     return `<div class="row" style="${i === state.focus ? 'font-weight:600' : 'color:var(--text-2)'}"><i style="background:${run.color}"></i>${esc(run.spec.name)}
-      <span class="mono">${run.spec.speed.toFixed(2)} b/s · ${feet}/${run.spec.legs.length} feet · margin ${f.margin.toFixed(2)} · x ${f.body.pos[0].toFixed(1)}</span></div>`;
+      <span class="mono" style="white-space:normal">${v.toFixed(2)}/${run.spec.speed.toFixed(2)} b/s · ${yr.toFixed(0)}°/s · ${feet}/${run.spec.legs.length} feet · margin ${f.margin.toFixed(2)}${tq} · pos ${f.body.pos[0].toFixed(1)}, ${f.body.pos[2].toFixed(1)} · hdg ${hdg.toFixed(0)}°</span></div>`;
   }).join('');
-  $('hud').innerHTML = `<div class="row" style="margin-bottom:4px"><b>${esc(sc.label)}</b><span style="color:var(--text-3)">${esc(sc.description)}</span></div>${rows}`;
+  $('hud').innerHTML = `<div class="row" style="margin-bottom:4px"><b>${esc(sc.label)}</b><span style="color:var(--text-3)">${esc(sc.description)}</span>${cmd}</div>${rows}`;
 }
 
 // ---------- side panels ----------
@@ -199,13 +209,14 @@ function renderPanel() {
 function renderMetrics() {
   const runs = state.runs;
   const scen = Object.keys(SCENARIOS);
-  const matrix = `<h2>All courses</h2><table class="matrix"><tr><th></th>${scen.map((s) => `<th title="${esc(SCENARIOS[s].description)}">${SCENARIOS[s].label}</th>`).join('')}</tr>
-    ${runs.map((run, ri) => `<tr><td><span class="chip" style="cursor:default;padding:2px 8px"><i style="background:${run.color}"></i>${esc(run.spec.name)}</span></td>${state.matrices[run.spec.id].rows.map((m) => {
+  const matrix = `<h2>All courses</h2><table class="matrix"><tr><th></th>${scen.map((s) => `<th title="${esc(SCENARIOS[s].label)}: ${esc(SCENARIOS[s].description)}" style="font-size:11px">${esc(SCENARIOS[s].short ?? SCENARIOS[s].label)}</th>`).join('')}</tr>
+    ${runs.map((run, ri) => `<tr><td><span class="chip" style="cursor:default;padding:2px 8px" title="${esc(run.spec.name)}"><i style="background:${run.color}"></i>${esc(run.spec.name.split(' ').map((w) => w[0]).join(''))}</span></td>${state.matrices[run.spec.id].rows.map((m) => {
       const n = m.evaluation.fails, w = m.evaluation.warns;
-      const label = n ? `${n} fail${n > 1 ? 's' : ''}` : w ? `${w} warn` : 'pass';
-      return `<td class="${m.scenario === state.terrain && ri === state.focus ? 'cur' : ''}" data-scn="${m.scenario}" data-focus="${ri}"><span class="st ${m.evaluation.verdict}">${label}</span></td>`;
+      const label = n ? `${n}` : w ? `${w}` : '';
+      const title = n ? `${n} fail${n > 1 ? 's' : ''}` : w ? `${w} warning${w > 1 ? 's' : ''}` : 'pass';
+      return `<td class="${m.scenario === state.terrain && ri === state.focus ? 'cur' : ''}" data-scn="${m.scenario}" data-focus="${ri}" title="${esc(m.label)}: ${title}" style="padding:4px 2px"><span class="st ${m.evaluation.verdict}">${label}</span></td>`;
     }).join('')}</tr>`).join('')}</table>
-    <p style="font-size:12px">Click a cell to watch that walker on that course. Server checks only warn until <code>config/cost-model.json</code> is calibrated.</p>`;
+    <p style="font-size:12px">Numbers are fails (✕) or warnings (!). Click a cell to watch that walker on that course. Server checks only warn until <code>config/cost-model.json</code> is calibrated.</p>`;
 
   const rows0 = runs[0].result.evaluation.rows;
   let lastGroup = null;
@@ -242,7 +253,9 @@ function renderDesign() {
       <div>timing</div><div>cycle ${s.gait.cycleTicks.toFixed(1)} ticks (${(s.gait.cycleTicks / 20).toFixed(2)} s) @ ${s.drive.rpm.toFixed(1)} RPM × ${s.drive.revsPerCycle} rev/cycle</div>
       <div>body</div><div>adapt ${esc(s.gait.bodyAdapt)} · smoothing ${s.gait.bodySmoothing} · sway ${s.gait.comShift}</div>
       <div>footholds</div><div>${s.gait.footholdSearch ? `search r=${s.gait.footholdSearch.radius}` : 'no search (raw placement)'}${s.gait.maxStepUp != null ? ` · maxStepUp ${s.gait.maxStepUp}` : ''}</div>
-      <div>support</div><div>${esc(s.physics.support)}${s.physics.support === 'kinematic' ? ' (controller holds hull; tipping is advisory)' : ' (must stay statically stable)'}</div>
+      <div>motion</div><div>top ${s.speed.toFixed(2)} b/s · max turn ${((s.maxYawRate * 180) / Math.PI).toFixed(1)}°/s (turn radius ${s.turnRadius.toFixed(2)} b) · accel ${s.gait.accel} b/s² · settle rate ${s.gait.settleRate}</div>
+      <div>stabilizer</div><div>${s.physics.stabilizer ? `Gyro Stabilizer ${s.physics.stabilizer.maxTorque} mass·b, ${s.physics.stabilizer.stressPerTorque} SU per mass·b (must hold the peak righting torque)` : 'none (must stay statically stable)'}</div>
+      <div>suspension</div><div>${s.physics.suspension.frequency} Hz, damping ratio ${s.physics.suspension.damping} (actual hull follows the planned pose)</div>
       <div>legs as</div><div>${esc(s.implementation.legRepresentation)}</div>
     </div>
     <h2>Legs</h2>
@@ -262,12 +275,15 @@ const TWEAKS = [
   { path: 'gait.comShift', label: 'Hull sway', min: 0, max: 1, step: 0.05, get: (s) => s.gait.comShift },
   { path: 'gait.bodySmoothing', label: 'Body smoothing', min: 0.05, max: 1, step: 0.05, get: (s) => s.gait.bodySmoothing },
   { path: 'gait.footholdSearch', label: 'Foothold search r', min: 0, max: 3, step: 0.25, get: (s) => s.gait.footholdSearch?.radius ?? 0 },
+  { path: 'gait.accel', label: 'Accel (b/s²)', min: 0.25, max: 10, step: 0.25, get: (s) => s.gait.accel },
+  { path: 'physics.stabilizer', label: 'Gyro torque (0 = none)', min: 0, max: 1000, step: 5, get: (s) => s.physics.stabilizer?.maxTorque ?? 0 },
+  { path: 'physics.suspension.frequency', label: 'Suspension (Hz)', min: 0.5, max: 8, step: 0.1, get: (s) => s.physics.suspension.frequency },
+  { path: 'physics.suspension.damping', label: 'Damping ratio', min: 0.1, max: 2, step: 0.05, get: (s) => s.physics.suspension.damping },
 ];
 const TWEAK_SELECTS = [
   { path: 'gait.preset', label: 'Gait', options: Object.keys(GAIT_PRESETS), get: (s) => s.gait.preset },
   { path: 'gait.swing', label: 'Swing profile', options: ['arc', 'box'], get: (s) => s.gait.swing },
   { path: 'gait.bodyAdapt', label: 'Body adapt', options: ['level', 'pitch'], get: (s) => s.gait.bodyAdapt },
-  { path: 'physics.support', label: 'Support model', options: ['static', 'kinematic'], get: (s) => s.physics.support },
   { path: 'implementation.legRepresentation', label: 'Legs as', options: LEG_REPRESENTATIONS, get: (s) => s.implementation.legRepresentation },
 ];
 
@@ -282,7 +298,7 @@ function renderTweak() {
       ${TWEAKS.map((t) => `<label${changed(t.path)} for="tw-${t.path}">${t.label}</label><input type="range" id="tw-${t.path}" data-tw="${t.path}" min="${t.min}" max="${t.max}" step="${t.step}" value="${t.get(s)}"><output class="mono">${(+t.get(s)).toFixed(t.step < 0.1 ? 2 : t.step < 1 ? 1 : 0)}</output>`).join('')}
       ${TWEAK_SELECTS.map((t) => `<label${changed(t.path)}>${t.label}</label><select data-tw="${t.path}" style="grid-column:span 2">${t.options.map((o) => `<option ${o === t.get(s) ? 'selected' : ''}>${o}</option>`).join('')}</select>`).join('')}
     </div>
-    <p style="font-size:12px" class="mono">→ ${s.speed.toFixed(2)} b/s · cycle ${s.gait.cycleTicks.toFixed(1)} ticks · ${stress(s).toFixed(0)} SU</p>
+    <p style="font-size:12px" class="mono">→ top ${s.speed.toFixed(2)} b/s · turn ${((s.maxYawRate * 180) / Math.PI).toFixed(1)}°/s · cycle ${s.gait.cycleTicks.toFixed(1)} ticks · drive ${stress(s).toFixed(0)} SU + gyro ${run.result.sim.summary.stabStress.toFixed(0)} SU here</p>
     <div class="btns">
       <button id="twSave" ${state.injected[s.id] ? 'disabled' : ''}>Save to walkers/${esc(s.id)}.json</button>
       <button id="twCopy">Copy JSON</button>
@@ -344,9 +360,9 @@ function renderModel() {
     <table class="mono">${Object.entries(state.targets).map(([k, v]) => `<tr><td>${k}</td><td class="num">${v ?? 'off'}</td></tr>`).join('')}</table>
     <h2>What this sandbox models</h2>
     <ul class="plain">
-      <li>Kinematics only: the hull moves at constant speed; legs never push it. Tipping is measured (support margin), not simulated.</li>
-      <li>Footholds are planned once per step at the column surface under the neutral foot, optionally moved by a local search (edges, void).</li>
-      <li>Straight-line walking on +x. No turning, no strafing, no slopes steeper than block steps.</li>
+      <li>The hull path comes from the course's throttle/steer commands (forward, reverse, turning, start/stop), limited by <code>gait.accel</code> and by the outer feet never moving faster than top speed. No strafing.</li>
+      <li>The actual hull height and tilt follow the planned pose as a damped spring (<code>physics.suspension</code>); horizontal motion and yaw follow the plan exactly. Tipping is measured (support margin), not simulated: a Gyro Stabilizer must supply mass × how far the centre of mass is outside the support polygon.</li>
+      <li>Footholds are planned once per step at the column surface under the neutral foot at mid-stance (predicted hull position and heading), optionally moved by a local search (edges, void).</li>
       <li>No leg-vs-leg or leg-vs-hull collision, except a foot-clash check between neighbours.</li>
       <li>Stress and server cost are linear formulas with tunable coefficients. Calibrate them against the real mod.</li>
     </ul>

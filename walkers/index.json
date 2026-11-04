@@ -2,7 +2,7 @@
   {
     "id": "biped",
     "name": "Biped",
-    "description": "Two-legged mech. Never statically stable; only works if the controller holds the hull. Useful as a stress test for the kinematic-support decision.",
+    "description": "Two-legged mech. Never statically stable: it stands on one foot for most of the cycle, so it needs a big Gyro Stabilizer. A stress test for the stabilizer model.",
     "color": "#9085e9"
   },
   {
@@ -20,7 +20,7 @@
   {
     "id": "quad-strider",
     "name": "Quad Strider",
-    "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; relies on the mod holding the hull kinematically because two feet down is never statically stable.",
+    "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; two feet down is never statically stable, so it carries a Gyro Stabilizer.",
     "color": "#3987e5"
   }
 ]

@@ -23,7 +23,7 @@ export const norm = (a) => {
 };
 export const vlerp = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
 
-// Rotation about the x axis (roll) and z axis (pitch; +pitch lifts the +x "nose").
+// Rotation about the x axis (roll), z axis (pitch; +pitch lifts the +x "nose") and y axis (yaw).
 export const rotX = (v, a) => {
   const c = Math.cos(a), s = Math.sin(a);
   return [v[0], v[1] * c - v[2] * s, v[1] * s + v[2] * c];
@@ -33,9 +33,18 @@ export const rotZ = (v, a) => {
   return [v[0] * c - v[1] * s, v[0] * s + v[1] * c, v[2]];
 };
 
-// Body pose: { pos:[x,y,z], pitch, roll }. Local origin = centre of the body's bottom face.
-export const bodyToWorld = (pose, p) => add(pose.pos, rotZ(rotX(p, pose.roll), pose.pitch));
-export const worldToBody = (pose, p) => rotX(rotZ(sub(p, pose.pos), -pose.pitch), -pose.roll);
+// Yaw follows the right-hand rule about +y (same as three.js rotation.y): +yaw turns the +x nose
+// toward -z (left). Heading of a hull with yaw ψ is [cos ψ, 0, -sin ψ].
+export const rotY = (v, a) => {
+  const c = Math.cos(a), s = Math.sin(a);
+  return [v[0] * c + v[2] * s, v[1], -v[0] * s + v[2] * c];
+};
+export const heading = (yaw) => [Math.cos(yaw), 0, -Math.sin(yaw)];
+
+// Body pose: { pos:[x,y,z], yaw, pitch, roll }. Local origin = centre of the body's bottom face.
+// Local → world: roll (x), then pitch (z), then yaw (y), then translate. (three.js Euler order 'YZX'.)
+export const bodyToWorld = (pose, p) => add(pose.pos, rotY(rotZ(rotX(p, pose.roll), pose.pitch), pose.yaw ?? 0));
+export const worldToBody = (pose, p) => rotX(rotZ(rotY(sub(p, pose.pos), -(pose.yaw ?? 0)), -pose.pitch), -pose.roll);
 
 // ---- 2D helpers (x, z ground plane) ----
 export function convexHull(points) {

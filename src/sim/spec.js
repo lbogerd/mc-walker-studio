@@ -97,6 +97,8 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
     footholdSearch: null,
     maxStepUp: null,
     cycleTicks: null,
+    accel: 2, // b/s²: how fast the commanded ground speed may change (also sets the yaw acceleration)
+    settleRate: 0.5, // fraction of the full gait rate used while moving slowly or settling into a stance
     ...(raw.gait || {}),
   };
   if (!GAIT_PRESETS[gait.preset]) errors.push(`gait.preset must be one of ${Object.keys(GAIT_PRESETS).join(', ')}`);
@@ -104,6 +106,9 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
   if (!['arc', 'box'].includes(gait.swing)) errors.push('gait.swing must be "arc" or "box"');
   if (!['level', 'pitch'].includes(gait.bodyAdapt)) errors.push('gait.bodyAdapt must be "level" or "pitch"');
   if (gait.footholdSearch === true) gait.footholdSearch = { radius: 1 };
+  if (!(isNum(gait.accel) && gait.accel > 0)) errors.push('gait.accel must be > 0 (b/s², how fast the walker speeds up and brakes)');
+  if (!(isNum(gait.settleRate) && gait.settleRate > 0 && gait.settleRate <= 1))
+    errors.push('gait.settleRate must be in (0, 1] (fraction of the full gait rate used when slow or settling)');
 
   const drive = { rpm: null, revsPerCycle: 1, stressPerLegPerRpm: 4, stressPerBlockPerRpm: 0.05, ...(raw.drive || {}) };
   let cycleTicks;
@@ -157,11 +162,42 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
   if (gait.preset === 'wave' && gait.duty < 1 - 1 / n - 1e-6)
     warnings.push(`Wave gait with duty ${gait.duty} lifts more than one leg at a time; use duty ≥ ${(1 - 1 / n).toFixed(2)}`);
 
-  const physics = { support: 'static', ...(raw.physics || {}) };
-  if (!['static', 'kinematic'].includes(physics.support)) errors.push('physics.support must be "static" or "kinematic"');
+  // ---- rest stance: phases of the gait clock where every foot is planted ----
+  const rest = restWindows(legs, gait.duty);
+  if (rest.planted < n)
+    warnings.push(`No point in the gait cycle has all ${n} feet planted (duty ${gait.duty}); when stopped the walker freezes with ${n - rest.planted} foot/feet in the air`);
+  gait.restPhase = rest.phase;
+  gait.restPlanted = rest.planted;
+
+  // ---- physics: Gyro Stabilizer (D6) and leg suspension (D1) ----
+  const rawPhysics = raw.physics || {};
+  if ('support' in rawPhysics) {
+    errors.push(
+      'physics.support was removed (decision D6: balance comes from a Gyro Stabilizer). Migrate: ' +
+      '"support": "static" → "stabilizer": null; "support": "kinematic" → "stabilizer": { "maxTorque": <mass·b>, "stressPerTorque": <SU per mass·b> }. ' +
+      'Size maxTorque from the "Peak righting torque" metric. See docs/walker-spec.md.');
+  }
+  const physics = {
+    stabilizer: rawPhysics.stabilizer ?? null,
+    suspension: { frequency: 2, damping: 0.7, ...(rawPhysics.suspension || {}) },
+  };
+  if (physics.stabilizer !== null) {
+    if (typeof physics.stabilizer !== 'object') errors.push('physics.stabilizer must be null or { maxTorque, stressPerTorque }');
+    else {
+      physics.stabilizer = { maxTorque: null, stressPerTorque: 2, ...physics.stabilizer };
+      if (!(isNum(physics.stabilizer.maxTorque) && physics.stabilizer.maxTorque > 0))
+        errors.push('physics.stabilizer.maxTorque must be > 0 (mass·b: block-masses × blocks of lever arm)');
+      if (!(isNum(physics.stabilizer.stressPerTorque) && physics.stabilizer.stressPerTorque >= 0))
+        errors.push('physics.stabilizer.stressPerTorque must be ≥ 0 (SU per mass·b of torque)');
+    }
+  }
+  if (!(isNum(physics.suspension.frequency) && physics.suspension.frequency > 0 && physics.suspension.frequency <= 10))
+    errors.push('physics.suspension.frequency must be in (0, 10] Hz');
+  if (!(isNum(physics.suspension.damping) && physics.suspension.damping >= 0))
+    errors.push('physics.suspension.damping must be ≥ 0 (damping ratio; 1 = critically damped)');
 
   const implementation = {
-    legRepresentation: 'renderOnly',
+    legRepresentation: 'contraption',
     footholdProbesPerStep: gait.footholdSearch ? 27 : 1,
     groundChecksPerFootPerTick: 1,
     syncEveryTicks: 1,
@@ -169,6 +205,9 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
   };
   if (!LEG_REPRESENTATIONS.includes(implementation.legRepresentation))
     errors.push(`implementation.legRepresentation must be one of ${LEG_REPRESENTATIONS.join(', ')}`);
+
+  const turnRadius = Math.max(0.5, ...legs.filter((l) => isVec(l.mount, 3) && isVec(l.neutral, 2))
+    .map((l) => Math.hypot(l.mount[0] + l.neutral[0], l.mount[2] + l.neutral[1])));
 
   const parts = { ...DEFAULT_PARTS, ...(raw.parts || {}) };
   const bom = buildBom(body, legs, parts);
@@ -191,11 +230,39 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
     bom,
     mass: body.blocks + legBlocks,
     targets: { ...sharedTargets, ...(raw.targets || {}) },
-    speed: (gait.stride / cycleTicks) * TPS, // blocks per second
+    speed: (gait.stride / cycleTicks) * TPS, // top speed, blocks per second (throttle 1)
+    // Turning: the fastest any foot may move over the ground is the top speed, so the max yaw rate
+    // (turning in place) is topSpeed / turnRadius, where turnRadius is the largest horizontal distance
+    // from the hull origin to a neutral foot position.
+    turnRadius,
+    maxYawRate: ((gait.stride / cycleTicks) * TPS) / turnRadius, // rad/s
     errors,
     warnings,
     raw,
   };
+}
+
+/**
+ * Rest stance analysis of the gait clock Φ: leg i is planted while frac(Φ + phase_i) < duty.
+ * Returns the number of feet planted in the best part of the cycle and the phase (0–1) in the middle
+ * of the longest window where that many feet are planted. When the walker stops, the gait clock runs
+ * on until it reaches such a window and then freezes, so it stands on all feet.
+ */
+export function restWindows(legs, duty, samples = 1000) {
+  const count = (P) => legs.reduce((a, l) => a + (((P + (l.phase ?? 0)) % 1 + 1) % 1 < duty ? 1 : 0), 0);
+  const c = [];
+  let best = 0;
+  for (let i = 0; i < samples; i++) { c.push(count(i / samples)); best = Math.max(best, c[i]); }
+  // longest circular run with c == best
+  let runStart = -1, bestLen = 0, bestStart = 0;
+  for (let i = 0; i < 2 * samples; i++) {
+    if (c[i % samples] === best) {
+      if (runStart < 0) runStart = i;
+      const L = i - runStart + 1;
+      if (L > bestLen && L <= samples) { bestLen = L; bestStart = runStart; }
+    } else runStart = -1;
+  }
+  return { planted: best, phase: ((bestStart + bestLen / 2) / samples) % 1, width: bestLen / samples };
 }
 
 function buildBom(body, legs, parts) {

@@ -53,7 +53,7 @@ if (flag('json')) {
     const lines = [];
     lines.push(md ? `## ${spec.name} (\`${id}\`)` : `\n━━ ${spec.name} (${id}) ━━`);
     if (spec.description) lines.push(md ? `_${spec.description}_` : spec.description);
-    lines.push(`${spec.legs.length} legs · ${spec.gait.preset} gait · duty ${spec.gait.duty} · cycle ${spec.gait.cycleTicks.toFixed(1)} ticks @ ${spec.drive.rpm.toFixed(0)} RPM · support ${spec.physics.support} · legs ${spec.implementation.legRepresentation}`);
+    lines.push(`${spec.legs.length} legs · ${spec.gait.preset} gait · duty ${spec.gait.duty} · cycle ${spec.gait.cycleTicks.toFixed(1)} ticks @ ${spec.drive.rpm.toFixed(0)} RPM · stabilizer ${spec.physics.stabilizer ? `${spec.physics.stabilizer.maxTorque} mass·b` : 'none'} · suspension ${spec.physics.suspension.frequency} Hz ζ ${spec.physics.suspension.damping} · legs ${spec.implementation.legRepresentation}`);
     for (const w of spec.warnings) lines.push(`⚠️  ${w}`);
     lines.push('');
     const rows = matrix[0].evaluation.rows;

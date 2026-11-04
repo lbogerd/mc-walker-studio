@@ -13,9 +13,9 @@
     { "id": "FL", "mount": [2.5, 0, -2.5], "neutral": [0, -1], "mirror": true },
     { "id": "HL", "mount": [-2.5, 0, -2.5], "neutral": [0, -1], "mirror": true }
   ],
-  "gait": { "preset": "alternating", "duty": 0.6, "stride": 3, "stepHeight": 1, "swing": "arc", "bodyAdapt": "level", "footholdSearch": null },
+  "gait": { "preset": "alternating", "duty": 0.6, "stride": 3, "stepHeight": 1, "swing": "arc", "bodyAdapt": "level", "footholdSearch": null, "accel": 2 },
   "drive": { "rpm": 32, "revsPerCycle": 1 },
-  "physics": { "support": "static" },
-  "implementation": { "legRepresentation": "renderOnly" },
+  "physics": { "stabilizer": null, "suspension": { "frequency": 2, "damping": 0.7 } },
+  "implementation": { "legRepresentation": "contraption" },
   "targets": {}
 }

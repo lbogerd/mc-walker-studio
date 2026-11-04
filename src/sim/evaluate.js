@@ -37,18 +37,35 @@ export function stress(spec) {
   return d.rpm * (spec.legs.length * d.stressPerLegPerRpm + spec.mass * d.stressPerBlockPerRpm);
 }
 
+/** Drive stress plus the stress the Gyro Stabilizer draws at its peak on this run. */
+export function totalStress(spec, sim) {
+  return stress(spec) + (sim?.summary.stabStress ?? 0);
+}
+
 /** Metric definitions: key → how to read it from (spec, sim, cost) and which target applies. */
 export const METRICS = [
-  { group: 'Feel', key: 'speed', label: 'Ground speed', unit: 'b/s', fmt: 2, get: (s, r) => r.summary.speed, target: 'speedMin', op: '>=',
-    help: 'stride ÷ cycle time. Player walk ≈ 4.3 b/s, sprint ≈ 5.6 b/s, horse ≈ 9 b/s.' },
+  { group: 'Feel', key: 'speed', label: 'Top speed', unit: 'b/s', fmt: 2, get: (s) => s.speed, target: 'speedMin', op: '>=',
+    help: 'stride ÷ cycle time at full throttle (the drive RPM sets it, D7). Player walk ≈ 4.3 b/s, sprint ≈ 5.6 b/s, horse ≈ 9 b/s.' },
+  { group: 'Feel', key: 'avgSpeed', label: 'Achieved speed', unit: 'b/s', fmt: 2, get: (s, r) => r.summary.speed, target: null, op: '>=',
+    help: 'Average ground speed on this course: hull path length ÷ run time. Lower than top speed when the course brakes, stands or turns.' },
+  { group: 'Feel', key: 'maxYaw', label: 'Max turn rate', unit: '°/s', fmt: 1, get: (s) => (s.maxYawRate * 180) / Math.PI, target: null, op: '>=',
+    help: 'Yaw rate turning in place at full steer: top speed ÷ turn radius (largest distance from the hull origin to a neutral foot), so the outermost foot moves at top speed.' },
+  { group: 'Feel', key: 'yawRate', label: 'Peak yaw rate', unit: '°/s', fmt: 1, get: (s, r) => r.summary.yawRateMaxDegS, target: null, op: '>=',
+    help: 'Fastest the hull actually turned on this course (after acceleration limits and outer-foot speed limits).' },
   { group: 'Feel', key: 'bob', label: 'Body bob', unit: 'b', fmt: 2, get: (s, r) => r.summary.bob, target: 'bodyBobMax', op: '<=',
     help: 'Peak-to-peak vertical body oscillation after removing terrain trend. Players standing on the deck feel this.' },
   { group: 'Feel', key: 'pitch', label: 'Max body tilt', unit: '°', fmt: 1, get: (s, r) => r.summary.pitchMaxDeg, target: 'bodyPitchMaxDeg', op: '<=',
     help: 'Largest pitch or roll of the hull (only non-zero with bodyAdapt "pitch").' },
   { group: 'Feel', key: 'vy', label: 'Peak vertical speed', unit: 'b/s', fmt: 2, get: (s, r) => r.summary.vyMax, target: null, op: '<=',
     help: 'How fast the hull moves up/down at worst (stairs, ledges).' },
+  { group: 'Feel', key: 'trackErr', label: 'Hull tracking error', unit: 'b', fmt: 2, get: (s, r) => r.summary.trackErrMax, target: null, op: '<=',
+    help: 'Largest gap between the planned hull height and the actual one. The legs push the hull like springs (physics.suspension, D1), so it lags behind the plan.' },
   { group: 'Stability', key: 'margin', label: 'Min stability margin', unit: 'b', fmt: 2, get: (s, r) => r.summary.marginMin, target: 'stabilityMarginMin', op: '>=',
-    help: 'Smallest distance from the centre of mass to the edge of the support polygon. Negative = would tip if the body were physically simulated. Only advisory for physics.support "kinematic".' },
+    help: 'Smallest distance from the centre of mass to the edge of the support polygon. Negative = would tip without help. Passes if it meets the target, or if a Gyro Stabilizer can supply the peak righting torque (load ≤ 100%).' },
+  { group: 'Stability', key: 'torque', label: 'Peak righting torque', unit: 'mass·b', fmt: 0, get: (s, r) => r.summary.torqueMax, target: null, op: '<=',
+    help: 'Torque needed to keep the hull upright at the worst tick: mass (blocks) × how far the centre of mass is outside the support polygon (b). Size physics.stabilizer.maxTorque from this.' },
+  { group: 'Stability', key: 'stabLoad', label: 'Stabilizer load', unit: '%', fmt: 0, scale: 100, get: (s, r) => r.summary.stabLoad, target: null, op: '<=',
+    help: 'Peak righting torque ÷ the stabilizer\'s maxTorque. Above 100% the walker tips. — = no stabilizer fitted.' },
   { group: 'Stability', key: 'stance', label: 'Min feet planted', unit: '', fmt: 0, get: (s, r) => r.summary.stanceMin, target: 'stanceMin', op: '>=',
     help: 'Fewest feet on the ground at any tick.' },
   { group: 'Mechanics', key: 'reach', label: 'Max reach used', unit: '%', fmt: 0, scale: 100, get: (s, r) => r.summary.reachMax, target: 'reachMax', op: '<=',
@@ -58,13 +75,15 @@ export const METRICS = [
   { group: 'Mechanics', key: 'collisions', label: 'Collision events', unit: '', fmt: 0, get: (s, r) => r.summary.collisions, target: 'collisionsMax', op: '<=',
     help: 'Toe stubs, knee clips, hull scrapes, steps into the void, foot clashes, steps above maxStepUp.' },
   { group: 'Mechanics', key: 'jointSpeed', label: 'Max joint speed', unit: '°/s', fmt: 0, get: (s, r) => r.summary.jointSpeedMaxDegS, target: 'jointSpeedMaxDegS', op: '<=',
-    help: 'Fastest any joint rotates. Very high values read as snapping/jitter at 20 TPS.' },
+    help: 'Fastest any joint rotates relative to the hull (hip yaw = leg plane or coxa direction, hip pitch, knee). Very high values read as snapping/jitter at 20 TPS.' },
   { group: 'Mechanics', key: 'clearance', label: 'Min hull clearance', unit: 'b', fmt: 2, get: (s, r) => r.summary.clearanceMin, target: null, op: '>=',
     help: 'Smallest gap between the hull bottom and the terrain.' },
   { group: 'Drive', key: 'rpm', label: 'Drive speed', unit: 'RPM', fmt: 1, get: (s) => s.drive.rpm, target: 'rpmMax', op: '<=',
     help: 'Rotational speed the leg drive needs (1200 × revsPerCycle ÷ cycleTicks).' },
-  { group: 'Drive', key: 'stress', label: 'Stress', unit: 'SU', fmt: 0, get: (s) => stress(s), target: 'stressMax', op: '<=',
-    help: 'Create stress impact: RPM × (legs × stressPerLegPerRpm + mass × stressPerBlockPerRpm).' },
+  { group: 'Drive', key: 'stabStress', label: 'Stabilizer stress', unit: 'SU', fmt: 0, get: (s, r) => r.summary.stabStress, target: null, op: '<=',
+    help: 'Peak stress the Gyro Stabilizer draws on this course: min(peak righting torque, maxTorque) × stressPerTorque. Included in Stress.' },
+  { group: 'Drive', key: 'stress', label: 'Stress', unit: 'SU', fmt: 0, get: (s, r) => totalStress(s, r), target: 'stressMax', op: '<=',
+    help: 'Create stress impact: drive RPM × (legs × stressPerLegPerRpm + mass × stressPerBlockPerRpm), plus the stabilizer\'s peak stress on this course.' },
   { group: 'Server', key: 'serverUs', label: 'Server cost', unit: 'µs/tick', fmt: 0, get: (s, r, c) => c.us, target: 'serverUsMax', op: '<=',
     help: 'Estimated main-thread time per walker per tick from config/cost-model.json.' },
   { group: 'Server', key: 'perServer', label: 'Walkers per server', unit: '', fmt: 0, get: (s, r, c) => c.walkersPerServer, target: 'walkersPerServerMin', op: '>=',
@@ -75,6 +94,11 @@ export const METRICS = [
     help: 'Measured time of THIS JavaScript implementation (gait + IK + body) per tick. A lower bound sanity check, not the server cost.' },
 ];
 
+/** True when a Gyro Stabilizer is fitted and the peak righting torque is within its maxTorque. */
+export function stabilizerHolds(spec, sim) {
+  return !!spec.physics.stabilizer && sim.summary.stabLoad !== null && sim.summary.stabLoad <= 1 + 1e-9;
+}
+
 export function evaluate(spec, sim, costModel) {
   const cost = estimateCost(spec, sim, costModel);
   const overrides = spec.raw.targets || {};
@@ -83,9 +107,10 @@ export function evaluate(spec, sim, costModel) {
     const target = m.target ? spec.targets[m.target] : null;
     let status = 'info';
     if (target !== null && target !== undefined) {
-      const ok = m.op === '>=' ? value >= target - 1e-9 : value <= target + 1e-9;
+      let ok = m.op === '>=' ? value >= target - 1e-9 : value <= target + 1e-9;
+      // D6: a walker that isn't statically stable passes if its Gyro Stabilizer can hold it
+      if (!ok && m.key === 'margin' && stabilizerHolds(spec, sim)) ok = true;
       status = ok ? 'pass' : 'fail';
-      if (!ok && m.key === 'margin' && spec.physics.support === 'kinematic') status = 'warn';
       if (!ok && m.group === 'Server' && !cost.calibrated) status = 'warn';
     }
     return { ...m, value, targetValue: target ?? null, override: m.target ? m.target in overrides : false, status };

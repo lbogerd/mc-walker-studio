@@ -13,7 +13,9 @@ npm run report -- quad-strider hexapod > report.md
 npm test
 ```
 
-- `walkers/*.json`: walker designs (format in `docs/walker-spec.md`)
+- `walkers/*.json`: walker designs (format in `docs/walker-spec.md`). Every walker is checked on terrain
+  courses (stairs, ledge, hill, trenches, rough) and on flat motion courses (turn in place, start-stop,
+  reverse + curve)
 - `config/targets.json`: the shared bar every walker is judged against. **This is the file to agree on.**
 - `config/cost-model.json`: server-cost coefficients (placeholders until calibrated, see `docs/model.md`)
 - `docs/decisions.md`: settled design decisions for the mod. **Read before building anything**

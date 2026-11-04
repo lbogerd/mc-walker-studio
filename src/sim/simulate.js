@@ -1,20 +1,28 @@
 // Kinematic walking-loop simulation at Minecraft tick resolution (20 TPS).
 //
 // Model (deliberately simple, see docs/model.md):
-//  * The body moves forward (+x) at constant speed = stride / cycle.
-//  * Each leg cycles stance → swing. A foothold is planned for every stance so that the foot sits
-//    at its neutral position under the hip at mid-stance. Footholds are snapped onto the block
-//    grid's surface and optionally moved by a foothold search (avoid edges / void).
-//  * Body height (and optionally pitch/roll) follows the average ground under the legs.
+//  * Pass 1 (planPath): the course's command timeline (throttle, steer) is integrated into a hull path
+//    (x, z, yaw) and a gait clock Φ per tick. Commands are saturated so no foot moves over the ground
+//    faster than the top speed, and rate-limited by gait.accel. Φ advances at max(activity, settleRate)
+//    / cycleTicks; when stopped it runs on until every foot is planted and then freezes.
+//  * Pass 2 (per tick): each leg cycles stance → swing on Φ. A foothold is planned for every stance
+//    so that the foot sits at its neutral position under the hip at mid-stance, using the predicted
+//    hull pose (position + yaw) at that moment. Footholds are snapped onto the block grid's surface
+//    and optionally moved by a foothold search (avoid edges / void).
+//  * Planned body height (and optionally pitch/roll) follows the average ground under the legs. The
+//    actual hull follows the planned one as a damped spring (physics.suspension, decision D1).
 //  * Each leg is solved with analytic 2-bone IK (+ optional coxa), with a pole hint for the knee.
 //  * Everything else (stability, reach, collisions, joint speed) is measured, not enforced.
 import {
   TPS, clamp, lerp, frac, smoothstep, add, sub, scale, dot, len, dist, norm, deg,
-  bodyToWorld, worldToBody, supportMargin, hullMargin, convexHull,
+  bodyToWorld, worldToBody, supportMargin, hullMargin, convexHull, heading,
 } from './math.js';
-import { VOID } from './terrain.js';
+import { VOID, commandAt, commandTicks } from './terrain.js';
 
 const now = () => (globalThis.performance ? performance.now() : Date.now());
+// The gait clock is integrated tick by tick, so exact touchdown instants (Φ + phase = integer) can
+// land a hair below the integer. Nudge before flooring so constant-speed runs match t / cycleTicks.
+const EPS = 1e-9;
 
 function prepLeg(leg, spec) {
   const segs = leg.segments;
@@ -49,7 +57,9 @@ function edgeDistance(terrain, x, z, h) {
   return d;
 }
 
-function planFoothold(terrain, x, z, search) {
+// Search offsets are in the hull's frame (dx along its heading), rotated into the world by yaw.
+function planFoothold(terrain, x, z, search, yaw = 0) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
   const h0 = terrain.heightAt(x, z);
   if (!search) return { x, y: h0, z, void: h0 <= VOID, adjusted: false, probes: 1 };
   const r = search.radius ?? 1;
@@ -59,7 +69,7 @@ function planFoothold(terrain, x, z, search) {
   for (let dz = -r / 2; dz <= r / 2 + 1e-9; dz += r / 2) {
     for (let dx = -r; dx <= r + 1e-9; dx += step) {
       probes++;
-      const cx = x + dx, cz = z + dz;
+      const cx = x + dx * cy + dz * sy, cz = z - dx * sy + dz * cy;
       const h = terrain.heightAt(cx, cz);
       if (h <= VOID) continue;
       const e = edgeDistance(terrain, cx, cz, h);
@@ -83,7 +93,7 @@ function swingPoint(A, B, s, gait, terrain) {
   }
   // apex clears the highest column between the two footholds by stepHeight
   let top = Math.max(A.void ? -Infinity : A.y, B.void ? -Infinity : B.y);
-  const n = Math.max(2, Math.ceil(Math.abs(B.x - A.x) * 2));
+  const n = Math.max(2, Math.ceil(Math.hypot(B.x - A.x, B.z - A.z) * 2));
   for (let i = 0; i <= n; i++) {
     const t = i / n;
     const h = terrain.heightAt(lerp(A.x, B.x, t), lerp(A.z, B.z, t));
@@ -124,9 +134,15 @@ function solveLeg(leg, targetL) {
   return { base, knee, foot, status, util: d / (a + b) };
 }
 
-function jointAngles(hip, base, knee, foot) {
-  const toFoot = sub(foot, hip);
-  const yaw = Math.atan2(toFoot[2], toFoot[0]);
+// Hip yaw is the coxa direction (3-segment legs) or the orientation of the leg plane (2-segment legs).
+// The bearing hip → foot is not used: it spins wildly when the foot passes under the hip.
+function jointAngles(leg, hip, base, knee, foot) {
+  let yaw;
+  if (leg.coxa > 0) yaw = Math.atan2(base[2] - hip[2], base[0] - hip[0]);
+  else {
+    const a = sub(foot, base), b = sub(knee, base);
+    yaw = Math.atan2(a[0] * b[1] - a[1] * b[0], a[1] * b[2] - a[2] * b[1]); // plane normal (a × b), z over x
+  }
   const femurV = sub(knee, base);
   const tibiaV = sub(foot, knee);
   const pitch = Math.atan2(femurV[1], Math.hypot(femurV[0], femurV[2]));
@@ -141,20 +157,144 @@ export function defaultTicks(spec, distance = 60) {
   return clamp(Math.ceil(Math.max(4 * T, distance / Math.max(v, 1e-3))), 40, 4000);
 }
 
+/** Run length for a course: its command timeline if it has one, else defaultTicks. */
+export function courseTicks(spec, commands, distance) {
+  const n = commands ? commandTicks(commands) : Infinity;
+  return Number.isFinite(n) ? n : defaultTicks(spec, distance);
+}
+
+/**
+ * Pass 1: integrate the driver commands into a hull path and gait clock.
+ *
+ *  vTop  = stride / cycleTicks                 (b/tick, top speed at the drive RPM, D7)
+ *  ωTop  = vTop / turnRadius                   (rad/tick, turning in place at full steer)
+ *  target (v, ω) = (throttle · vTop, steer · ωTop), then scaled down together so the fastest foot
+ *         speed max_i |(v + ω·z_i, −ω·x_i)| stays ≤ vTop (outer legs set the limit when curving)
+ *  v, ω move toward the target by at most accel/20² b/tick² and (accel/turnRadius)/20² rad/tick²
+ *  activity a = max(|v|/vTop, |ω|/ωTop, footSpeedMax/vTop) ∈ [0, 1]
+ *  dΦ/dt = max(a, settleRate) / cycleTicks while moving; when stopped (v = ω = 0, no command) Φ runs on
+ *         at settleRate until the rest stance is reached (all feet planted) and then freezes.
+ */
+function planPath(spec, legs, commands, tA, tB, x0) {
+  const T = spec.gait.cycleTicks;
+  const duty = spec.gait.duty;
+  const vTop = spec.gait.stride / T;
+  const R = spec.turnRadius;
+  const wTop = vTop / R;
+  const aLin = spec.gait.accel / (TPS * TPS);
+  const aYaw = aLin / R;
+  const settle = spec.gait.settleRate;
+  const feet = legs.map((l) => [l.footLocal[0], l.footLocal[2]]);
+  const footSpeed = (v, w) => feet.reduce((m, [px, pz]) => Math.max(m, Math.hypot(v + w * pz, w * px)), 0);
+  const saturate = (v, w) => {
+    const f = footSpeed(v, w);
+    const k = f > vTop ? vTop / f : 1;
+    return [v * k, w * k];
+  };
+  const activity = (v, w) => clamp(Math.max(Math.abs(v) / vTop, Math.abs(w) / wTop, footSpeed(v, w) / vTop), 0, 1);
+  const planted = (P) => legs.reduce((a, l) => a + (frac(P + l.phase + EPS) < duty ? 1 : 0), 0);
+  const restN = spec.gait.restPlanted ?? legs.length; // feet planted in the rest stance
+  const target = (t) => {
+    const c = commandAt(commands, t);
+    return saturate(clamp(c.throttle, -1, 1) * vTop, clamp(c.steer, -1, 1) * wTop);
+  };
+  const towards = (x, goal, step) => (Math.abs(goal - x) <= step ? goal : x + Math.sign(goal - x) * step);
+
+  const N = tB - tA + 1;
+  const X = new Float64Array(N), Z = new Float64Array(N), YAW = new Float64Array(N), PH = new Float64Array(N);
+  const V = new Float64Array(N), W = new Float64Array(N), ACT = new Float64Array(N);
+  const i0 = -tA; // index of tick 0
+  // before tick 0 the walker is in steady state on the first command
+  const [v0, w0] = target(Math.min(-1, tA));
+  const moving0 = v0 !== 0 || w0 !== 0;
+  const rate0 = moving0 ? Math.max(activity(v0, w0), settle) / T : 0;
+  X[i0] = x0; Z[i0] = 0; YAW[i0] = 0; PH[i0] = moving0 ? 0 : spec.gait.restPhase;
+  V[i0] = v0; W[i0] = w0; ACT[i0] = moving0 ? activity(v0, w0) : 0;
+  for (let i = i0 - 1; i >= 0; i--) {
+    YAW[i] = YAW[i + 1] - w0;
+    const h = heading(YAW[i] + w0 / 2);
+    X[i] = X[i + 1] - v0 * h[0];
+    Z[i] = Z[i + 1] - v0 * h[2];
+    PH[i] = PH[i + 1] - rate0;
+    V[i] = v0; W[i] = w0; ACT[i] = ACT[i0];
+  }
+  let v = v0, w = w0;
+  for (let i = i0; i < N - 1; i++) {
+    const t = tA + i;
+    const [tv, tw] = target(t);
+    [v, w] = saturate(towards(v, tv, aLin), towards(w, tw, aYaw));
+    const h = heading(YAW[i] + w / 2);
+    YAW[i + 1] = YAW[i] + w;
+    X[i + 1] = X[i] + v * h[0];
+    Z[i + 1] = Z[i] + v * h[2];
+    let dP;
+    if (v === 0 && w === 0 && tv === 0 && tw === 0) {
+      // stopped: run on to the rest stance (never past the middle of the rest window), then freeze
+      if (planted(PH[i]) >= restN) dP = 0;
+      else {
+        const goal = PH[i] + frac(spec.gait.restPhase - PH[i]);
+        dP = Math.min(settle / T, goal - PH[i]);
+      }
+    } else dP = Math.max(activity(v, w), settle) / T;
+    PH[i + 1] = PH[i] + dP;
+    V[i + 1] = v; W[i + 1] = w; ACT[i + 1] = activity(v, w);
+  }
+  const rateEnd = N > 1 ? PH[N - 1] - PH[N - 2] : 0;
+
+  const idx = (t) => t - tA;
+  /** Hull pose { x, z, yaw } at fractional tick tf (extrapolated outside the planned range). */
+  const poseAt = (tf) => {
+    if (!(tf > tA)) {
+      if (!Number.isFinite(tf) || tf === tA) return { x: X[0], z: Z[0], yaw: YAW[0] };
+      const d = tf - tA, yaw = YAW[0] + w0 * d, hh = heading(YAW[0] + (w0 * d) / 2);
+      return { x: X[0] + v0 * d * hh[0], z: Z[0] + v0 * d * hh[2], yaw };
+    }
+    if (tf >= tB) {
+      const j = N - 1;
+      if (!Number.isFinite(tf)) return { x: X[j], z: Z[j], yaw: YAW[j] };
+      const d = tf - tB, vE = V[j], wE = W[j], hh = heading(YAW[j] + (wE * d) / 2);
+      return { x: X[j] + vE * d * hh[0], z: Z[j] + vE * d * hh[2], yaw: YAW[j] + wE * d };
+    }
+    const f = tf - tA, j = Math.floor(f), a = f - j;
+    return { x: lerp(X[j], X[j + 1], a), z: lerp(Z[j], Z[j + 1], a), yaw: lerp(YAW[j], YAW[j + 1], a) };
+  };
+  /** Gait clock at fractional tick tf. */
+  const phaseAt = (tf) => {
+    if (tf <= tA) return PH[0] + rate0 * (tf - tA);
+    if (tf >= tB) return PH[N - 1] + rateEnd * (tf - tB);
+    const f = tf - tA, j = Math.floor(f);
+    return lerp(PH[j], PH[j + 1], f - j);
+  };
+  /** First (fractional) tick at which the gait clock reaches P; ±Infinity if it never does. */
+  const timeAtPhase = (P) => {
+    if (P <= PH[0]) return P === PH[0] ? tA : rate0 > 0 ? tA - (PH[0] - P) / rate0 : -Infinity;
+    if (P > PH[N - 1]) return rateEnd > 0 ? tB + (P - PH[N - 1]) / rateEnd : Infinity;
+    let lo = 0, hi = N - 1; // first index with PH >= P
+    while (lo < hi) { const m = (lo + hi) >> 1; if (PH[m] >= P) hi = m; else lo = m + 1; }
+    return tA + lo - 1 + (P - PH[lo - 1]) / (PH[lo] - PH[lo - 1]);
+  };
+  return {
+    poseAt, phaseAt, timeAtPhase, vTop, wTop,
+    at: (t) => { const j = idx(t); return { x: X[j], z: Z[j], yaw: YAW[j], phase: PH[j], v: V[j], w: W[j], activity: ACT[j] }; },
+  };
+}
+
 /**
  * Run the walking loop.
+ * opts: { ticks, distance, startX, frames: false, commands }  (commands override the course's)
  * @returns {{frames, footholds, events, series, summary, ticks, cycleTicks}}
  */
 export function simulate(spec, terrain, opts = {}) {
   const T = spec.gait.cycleTicks;
   const duty = spec.gait.duty;
-  const v = spec.gait.stride / T; // blocks / tick
   const warm = Math.ceil(T * 2);
-  const ticks = opts.ticks ?? defaultTicks(spec, opts.distance);
-  const x0 = opts.startX ?? 0;
+  const commands = opts.commands ?? terrain.commands ?? null;
+  const ticks = opts.ticks ?? courseTicks(spec, commands, opts.distance);
   const legs = spec.legs.map((l) => prepLeg(l, spec));
   const search = spec.gait.footholdSearch;
-  const xBodyAt = (t) => x0 + v * t;
+  const tEndPlan = ticks + Math.ceil((4 * T) / spec.gait.settleRate) + 10;
+  const path = planPath(spec, legs, commands, -warm, tEndPlan, opts.startX ?? 0);
+  const flatPose = (p) => ({ pos: [p.x, 0, p.z], yaw: p.yaw, pitch: 0, roll: 0 });
 
   // ---- foothold planner (memoised per leg & stance index) ----
   const fhCache = legs.map(() => new Map());
@@ -163,13 +303,16 @@ export function simulate(spec, terrain, opts = {}) {
     let f = fhCache[li].get(k);
     if (f) return f;
     const leg = legs[li];
-    const tStart = (k - leg.phase) * T;
-    const tMid = tStart + (duty * T) / 2;
-    f = planFoothold(terrain, xBodyAt(tMid) + leg.footLocal[0], leg.footLocal[2], search);
+    const P0 = k - leg.phase; // gait clock when stance k begins
+    const tMid = path.timeAtPhase(P0 + duty / 2);
+    const mid = path.poseAt(tMid);
+    const w = bodyToWorld(flatPose(mid), leg.footLocal);
+    f = planFoothold(terrain, w[0], w[2], search, mid.yaw);
     probeCount += f.probes;
     f.k = k;
-    f.tStart = tStart;
-    f.tEnd = tStart + duty * T;
+    f.yaw = mid.yaw;
+    f.tStart = path.timeAtPhase(P0);
+    f.tEnd = path.timeAtPhase(P0 + duty);
     fhCache[li].set(k, f);
     return f;
   };
@@ -184,15 +327,28 @@ export function simulate(spec, terrain, opts = {}) {
   };
 
   const frames = [];
-  const series = { margin: [], bodyY: [], reach: [], footErr: [], stance: [], clearance: [] };
+  const series = { margin: [], bodyY: [], reach: [], footErr: [], stance: [], clearance: [], speed: [], torque: [], trackErr: [] };
   const sideGroups = [1, -1].map((s) => legs.map((l, i) => [l, i]).filter(([l]) => l.side === s).sort((a, b) => b[0].mount[0] - a[0].mount[0]));
 
   let bodyY = null, pitch = 0, roll = 0, shiftX = 0, shiftZ = 0;
+  // actual hull (suspension follower, D1): height, pitch, roll and their rates
+  const susp = spec.physics.suspension;
+  const wn = 2 * Math.PI * susp.frequency, zeta = susp.damping;
+  const SUB = 8, hSub = 1 / TPS / SUB;
+  let act = null;
+  const follow = (x, xv, target) => {
+    for (let i = 0; i < SUB; i++) {
+      xv += (wn * wn * (target - x) - 2 * zeta * wn * xv) * hSub;
+      x += xv * hSub;
+    }
+    return [x, xv];
+  };
   const comShift = clamp(spec.gait.comShift ?? 0, 0, 1);
   const horizon = (1 - duty) * T + 2;
   let prevAngles = null;
   let jointSpeedMax = 0, reachMax = 0, footErrMax = 0, marginMin = Infinity, stanceMin = Infinity;
-  let clearanceMin = Infinity, pitchMax = 0, vyMax = 0;
+  let clearanceMin = Infinity, pitchMax = 0, vyMax = 0, torqueMax = 0, trackErrMax = 0, tiltErrMax = 0;
+  let pathLength = 0, yawRateMax = 0;
   let solveTime = 0, solveTicks = 0;
   const comLocal = add([0, spec.body.size[1] / 2, 0], spec.body.comOffset);
   const [sx, , sz] = spec.body.size;
@@ -203,11 +359,12 @@ export function simulate(spec, terrain, opts = {}) {
 
   for (let t = -warm; t <= ticks; t++) {
     const t0 = now();
+    const P = path.at(t);
     // 1. leg targets in world space
     const legState = legs.map((leg, li) => {
-      const u = t / T + leg.phase;
+      const u = P.phase + leg.phase + EPS;
       const k = Math.floor(u);
-      const phi = frac(u);
+      const phi = u - k;
       const A = foothold(li, k);
       if (phi < duty) {
         return { stance: true, target: [A.x, A.y, A.z], ground: A.void ? null : A.y, fh: A, next: null, k, s: null };
@@ -219,7 +376,7 @@ export function simulate(spec, terrain, opts = {}) {
       return { stance: false, target: sp.pos, ground: A.void && B.void ? null : lerp(ga, gb, sp.hx), fh: A, next: B, k, s };
     });
 
-    // 2. body pose follows the ground under the legs
+    // 2. planned body pose follows the ground under the legs
     const grounds = legState.map((s, i) => [s.ground, legs[i]]).filter(([g]) => g !== null);
     const gMean = grounds.length ? grounds.reduce((a, [g]) => a + g, 0) / grounds.length : 0;
     const yTarget = gMean + spec.body.rideHeight;
@@ -236,7 +393,6 @@ export function simulate(spec, terrain, opts = {}) {
       rTarget = -clamp(fit(2), -0.3, 0.3);
     }
     const kS = clamp(spec.gait.bodySmoothing, 0.01, 1);
-    const prevY = bodyY;
     if (bodyY === null) bodyY = yTarget;
     else bodyY += (yTarget - bodyY) * kS;
     pitch += (pTarget - pitch) * kS;
@@ -246,10 +402,10 @@ export function simulate(spec, terrain, opts = {}) {
     if (comShift > 0) {
       const sets = [];
       for (let j = 0; j <= 3; j++) {
-        const tt = t + (j / 3) * horizon;
+        const ph = path.phaseAt(t + (j / 3) * horizon);
         const pts = [];
         legs.forEach((leg, li) => {
-          const u = tt / T + leg.phase;
+          const u = ph + leg.phase + EPS;
           if (frac(u) < duty) {
             const f = foothold(li, Math.floor(u));
             if (!f.void) pts.push([f.x, f.z]);
@@ -258,7 +414,8 @@ export function simulate(spec, terrain, opts = {}) {
         if (pts.length >= 3) sets.push(convexHull(pts));
       }
       if (sets.length) {
-        const c0 = [xBodyAt(t) + comLocal[0], comLocal[2]];
+        const cw = bodyToWorld(flatPose(P), comLocal);
+        const c0 = [cw[0], cw[2]];
         const score = (dx, dz) => {
           const p = [c0[0] + dx, c0[1] + dz];
           let m = Infinity;
@@ -278,9 +435,16 @@ export function simulate(spec, terrain, opts = {}) {
         shiftZ += (best[1] * comShift - shiftZ) * kS;
       }
     }
-    const pose = { pos: [xBodyAt(t) + shiftX, bodyY, shiftZ], pitch, roll };
+    // actual hull: damped second-order follower of the planned height / pitch / roll
+    if (act === null) act = { y: bodyY, vy: 0, p: pitch, vp: 0, r: roll, vr: 0 };
+    else {
+      [act.y, act.vy] = follow(act.y, act.vy, bodyY);
+      [act.p, act.vp] = follow(act.p, act.vp, pitch);
+      [act.r, act.vr] = follow(act.r, act.vr, roll);
+    }
+    const pose = { pos: [P.x + shiftX, act.y, P.z + shiftZ], yaw: P.yaw, pitch: act.p, roll: act.r };
 
-    // 3. IK per leg
+    // 3. IK per leg (legs hang off the actual hull)
     const legOut = legState.map((st, li) => {
       const leg = legs[li];
       const tl = worldToBody(pose, st.target);
@@ -301,6 +465,7 @@ export function simulate(spec, terrain, opts = {}) {
     const support = [];
     let reach = 0, ferr = 0, stanceN = 0;
     const angles = [];
+    const cycle = Math.floor(P.phase);
     legOut.forEach((o, li) => {
       const leg = legs[li], st = o.st;
       const err = dist(o.foot, st.target);
@@ -325,14 +490,15 @@ export function simulate(spec, terrain, opts = {}) {
         if (!A.void && !B.void && B.y - A.y > spec.gait.maxStepUp)
           emit('step-too-high', t, leg.id, `Step of ${B.y - A.y} b exceeds maxStepUp ${spec.gait.maxStepUp}`, st.k);
       }
-      angles.push(...jointAngles(o.hip, o.base, o.knee, o.foot));
+      // joint angles relative to the hull (hull yaw/pitch is not joint motion)
+      angles.push(...jointAngles(leg, leg.mount, o.sol.base, o.sol.knee, o.sol.foot));
     });
     // foot clash between neighbours on the same side
     for (const group of sideGroups) {
       for (let g = 0; g + 1 < group.length; g++) {
         const a = legOut[group[g][1]].foot, b = legOut[group[g + 1][1]].foot;
         if (Math.hypot(a[0] - b[0], a[2] - b[2]) < 0.6)
-          emit('foot-clash', t, `${group[g][0].id}/${group[g + 1][0].id}`, 'Neighbouring feet closer than 0.6 b', Math.floor(t / T));
+          emit('foot-clash', t, `${group[g][0].id}/${group[g + 1][0].id}`, 'Neighbouring feet closer than 0.6 b', cycle);
       }
     }
     if (prevAngles) {
@@ -352,29 +518,43 @@ export function simulate(spec, terrain, opts = {}) {
       const h = terrain.heightAt(w[0], w[2]);
       if (h > VOID) clearance = Math.min(clearance, w[1] - h);
     }
-    if (clearance < 0) emit('body-scrape', t, 'body', `Hull ${(-clearance).toFixed(2)} b into terrain`, Math.floor(t / T));
+    if (clearance < 0) emit('body-scrape', t, 'body', `Hull ${(-clearance).toFixed(2)} b into terrain`, cycle);
+    // righting torque the hull needs to not tip (D6): mass × how far the CoM is outside the support polygon
+    const torque = spec.mass * Math.max(0, -margin);
+    const trackErr = act.y - bodyY;
 
     marginMin = Math.min(marginMin, margin);
     stanceMin = Math.min(stanceMin, stanceN);
     reachMax = Math.max(reachMax, reach);
     footErrMax = Math.max(footErrMax, ferr);
     clearanceMin = Math.min(clearanceMin, clearance);
-    pitchMax = Math.max(pitchMax, Math.abs(pitch), Math.abs(roll));
-    if (prevY !== null) vyMax = Math.max(vyMax, Math.abs(bodyY - prevY));
+    pitchMax = Math.max(pitchMax, Math.abs(act.p), Math.abs(act.r));
+    vyMax = Math.max(vyMax, Math.abs(act.vy) / TPS);
+    torqueMax = Math.max(torqueMax, torque);
+    trackErrMax = Math.max(trackErrMax, Math.abs(trackErr));
+    tiltErrMax = Math.max(tiltErrMax, Math.abs(act.p - pitch), Math.abs(act.r - roll));
+    if (t < ticks) pathLength += Math.abs(path.at(t + 1).v);
+    yawRateMax = Math.max(yawRateMax, Math.abs(P.w));
 
     series.margin.push(margin);
-    series.bodyY.push(bodyY);
+    series.bodyY.push(act.y);
     series.reach.push(reach);
     series.footErr.push(ferr);
     series.stance.push(stanceN);
     series.clearance.push(Number.isFinite(clearance) ? clearance : null);
+    series.speed.push(Math.abs(P.v) * TPS);
+    series.torque.push(torque);
+    series.trackErr.push(trackErr);
 
     if (opts.frames !== false) frames.push({
       t,
-      body: { pos: pose.pos, pitch, roll },
+      phase: P.phase,
+      body: { pos: pose.pos, yaw: pose.yaw, pitch: act.p, roll: act.r, plannedY: bodyY },
+      cmd: { ...commandAt(commands, t), v: P.v * TPS, yawRate: deg(P.w) * TPS, activity: P.activity },
       com: comW,
       hull,
       margin,
+      torque,
       legs: legOut.map((o) => ({
         hip: o.hip, base: o.base, knee: o.knee, foot: o.foot,
         stance: o.st.stance,
@@ -402,6 +582,14 @@ export function simulate(spec, terrain, opts = {}) {
   const counts = {};
   for (const e of events) counts[e.type] = (counts[e.type] || 0) + 1;
 
+  // stabilizer (D6): capped righting torque, drawing stress in proportion to the torque it applies
+  const stab = spec.physics.stabilizer;
+  const stabLoad = stab ? torqueMax / stab.maxTorque : null;
+  const stabStress = stab ? Math.min(torqueMax, stab.maxTorque) * stab.stressPerTorque : 0;
+
+  const start = path.at(0), end = path.at(ticks);
+  const h0 = heading(start.yaw);
+  const secs = Math.max(1, ticks) / TPS;
   return {
     ticks,
     cycleTicks: T,
@@ -410,8 +598,17 @@ export function simulate(spec, terrain, opts = {}) {
     events: events.sort((a, b) => a.t - b.t),
     series,
     summary: {
-      speed: v * TPS,
-      distance: v * ticks,
+      speed: pathLength / secs, // achieved average ground speed (b/s, path length / time)
+      topSpeed: path.vTop * TPS,
+      distance: pathLength,
+      netForward: (end.x - start.x) * h0[0] + (end.z - start.z) * h0[2], // along the starting heading
+      netDisplacement: Math.hypot(end.x - start.x, end.z - start.z),
+      yawTotalDeg: deg(end.yaw - start.yaw),
+      yawRateMaxDegS: deg(yawRateMax) * TPS,
+      maxYawRateDegS: deg(path.wTop) * TPS,
+      endSpeed: Math.abs(end.v) * TPS,
+      endYawRateDegS: Math.abs(deg(end.w)) * TPS,
+      endPlanted: series.stance.length ? series.stance[series.stance.length - 1] : 0,
       marginMin,
       stanceMin,
       reachMax,
@@ -421,6 +618,11 @@ export function simulate(spec, terrain, opts = {}) {
       vyMax: vyMax * TPS,
       pitchMaxDeg: deg(pitchMax),
       jointSpeedMaxDegS: deg(jointSpeedMax) * TPS,
+      torqueMax,
+      stabLoad,
+      stabStress,
+      trackErrMax,
+      tiltErrMaxDeg: deg(tiltErrMax),
       eventCounts: counts,
       collisions: events.filter((e) => COLLISION_TYPES.includes(e.type)).length,
       refUsPerTick: (solveTime / Math.max(1, solveTicks)) * 1000,

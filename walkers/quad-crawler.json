@@ -7,7 +7,8 @@
     "decisions": [
       "Same hull and mounts as quad-strider; gait, RPM and leg length differ.",
       "Hull sway (comShift: 1) is done by the controller so players never tune it by hand.",
-      "Legs are 0.5 b longer per segment than the strider: the sway moves the hips and 3+3 legs over-reach on flat ground."
+      "Legs are 0.5 b longer per segment than the strider: the sway moves the hips and 3+3 legs over-reach on flat ground.",
+      "Statically stable, so no Gyro Stabilizer (D6): it saves the strider's stabilizer stress."
     ],
     "openQuestions": [
       "Is ~1.6 b/s too slow to feel good as a vehicle?"
@@ -75,9 +76,9 @@
     "revsPerCycle": 1
   },
   "physics": {
-    "support": "static"
+    "stabilizer": null
   },
   "implementation": {
-    "legRepresentation": "renderOnly"
+    "legRepresentation": "contraption"
   }
 }

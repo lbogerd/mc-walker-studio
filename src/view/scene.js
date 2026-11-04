@@ -98,15 +98,30 @@ export class StudioScene {
     return Math.round(z);
   }
 
-  /** Rebuild everything. runs: [{ spec, color, result:{terrain, sim} }] */
+  /**
+   * Rebuild everything. runs: [{ spec, color, result:{terrain, sim} }]
+   * Each lane is a band along z wide enough for the walker plus the sideways extent of its path
+   * (turning courses). lane.z is the band centre in world z; lane.oz is the integer world offset of
+   * the lane's own coordinates, chosen so the path is centred in the band.
+   */
   setRuns(runs) {
     for (const lane of this.lanes) this.scene.remove(lane.group);
-    this.lanes = runs.map((run) => ({
-      run,
-      width: Math.max(run.spec.body.size[2], ...run.spec.legs.map((l) => 2 * Math.abs(l.mount[2] + l.neutral[1]) + 2)) + 2,
-    }));
+    this.lanes = runs.map((run) => {
+      const ext = { xMin: 0, xMax: 0, zMin: 0, zMax: 0 };
+      for (const f of run.result.sim.frames) {
+        const [x, , z] = f.body.pos;
+        ext.xMin = Math.min(ext.xMin, x); ext.xMax = Math.max(ext.xMax, x);
+        ext.zMin = Math.min(ext.zMin, z); ext.zMax = Math.max(ext.zMax, z);
+      }
+      // a turning walker sweeps a circle, so its footprint is as wide as its longest reach
+      const reach = Math.max(run.spec.body.size[0], run.spec.body.size[2], ...run.spec.legs.map((l) => 2 * Math.hypot(l.mount[0] + l.neutral[0], l.mount[2] + l.neutral[1]) + 2));
+      const turns = run.result.sim.summary.yawRateMaxDegS > 0;
+      const base = (turns ? reach : Math.max(run.spec.body.size[2], ...run.spec.legs.map((l) => 2 * Math.abs(l.mount[2] + l.neutral[1]) + 2))) + 2;
+      return { run, ...ext, base, width: base + (ext.zMax - ext.zMin) };
+    });
     this.lanes.forEach((lane, i) => {
       lane.z = this.laneZ(i);
+      lane.oz = Math.round(lane.z - (lane.zMin + lane.zMax) / 2);
       this.buildLane(lane);
     });
     this.buildTerrain();
@@ -115,22 +130,23 @@ export class StudioScene {
   buildTerrain() {
     this.terrainGroup.clear();
     if (!this.lanes.length) return;
-    const minX = -14;
-    let maxX = 20;
+    let minX = -14, maxX = 20;
     for (const l of this.lanes) {
-      const f = l.run.result.sim.frames;
-      if (f.length) maxX = Math.max(maxX, f[f.length - 1].body.pos[0] + 16);
+      minX = Math.min(minX, l.xMin - 16);
+      maxX = Math.max(maxX, l.xMax + 16);
     }
+    minX = Math.floor(minX);
     maxX = Math.ceil(maxX);
     const cells = [];
     for (const lane of this.lanes) {
       const terrain = lane.run.result.terrain;
-      const hw = Math.ceil(lane.width / 2 + LANE_GAP / 2);
+      const hw = lane.base / 2 + LANE_GAP / 2;
+      const z0 = Math.floor(lane.zMin - hw), z1 = Math.ceil(lane.zMax + hw);
       for (let ix = minX; ix < maxX; ix++)
-        for (let iz = -hw; iz < hw; iz++) {
+        for (let iz = z0; iz < z1; iz++) {
           const h = terrain.column(ix, iz);
           if (h <= VOID) continue;
-          for (let y = Math.min(h - 1, -2); y < h; y++) cells.push([ix, y, iz + Math.round(lane.z), y === h - 1, terrain.surface]);
+          for (let y = Math.min(h - 1, -2); y < h; y++) cells.push([ix, y, iz + lane.oz, y === h - 1, terrain.surface]);
         }
     }
     const mat = new THREE.MeshLambertMaterial({ map: this.tex });
@@ -158,7 +174,7 @@ export class StudioScene {
   buildLane(lane) {
     const { spec, color } = lane.run;
     const group = new THREE.Group();
-    group.position.z = lane.z;
+    group.position.z = lane.oz;
     this.scene.add(group);
     lane.group = group;
 
@@ -230,7 +246,8 @@ export class StudioScene {
     lane.footholds = fhs;
     const fp = new THREE.InstancedMesh(new THREE.BoxGeometry(0.8, 0.03, 0.8), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45 }), Math.max(1, fhs.length));
     fhs.forEach((f, i) => {
-      m.makeTranslation(f.x, f.y + 0.02, f.z);
+      m.makeRotationY(f.yaw ?? 0);
+      m.setPosition(f.x, f.y + 0.02, f.z);
       fp.setMatrixAt(i, m);
       c.set(f.void ? '#ff4d4d' : f.adjusted ? '#ffffff' : color);
       fp.setColorAt(i, c);
@@ -264,8 +281,11 @@ export class StudioScene {
       lane.frame = a < 0.5 ? f0 : f1;
       const pos = lerpArr(f0.body.pos, f1.body.pos, a);
       lane.hull.position.set(...pos);
-      lane.hull.rotation.set(f0.body.roll + (f1.body.roll - f0.body.roll) * a, 0, f0.body.pitch + (f1.body.pitch - f0.body.pitch) * a, 'ZYX');
+      // sim pose: roll (x), then pitch (z), then yaw (y)  →  three.js Euler order 'YZX'
+      const yaw = (f0.body.yaw ?? 0) + ((f1.body.yaw ?? 0) - (f0.body.yaw ?? 0)) * a;
+      lane.hull.rotation.set(f0.body.roll + (f1.body.roll - f0.body.roll) * a, yaw, f0.body.pitch + (f1.body.pitch - f0.body.pitch) * a, 'YZX');
       lane.bodyPos = pos;
+      lane.yaw = yaw;
       lane.comMarker.position.set(...lerpArr(f0.com, f1.com, a));
 
       spec.legs.forEach((leg, li) => {
@@ -318,15 +338,23 @@ export class StudioScene {
 
     const focus = this.lanes[focusIndex] ?? this.lanes[0];
     if (focus?.bodyPos) {
-      const p = new THREE.Vector3(focus.bodyPos[0], focus.bodyPos[1], focus.bodyPos[2] + focus.z);
+      const p = new THREE.Vector3(focus.bodyPos[0], focus.bodyPos[1], focus.bodyPos[2] + focus.oz);
+      const yaw = focus.yaw ?? 0;
       if (this.follow && this.lastFocus) {
         const d = p.clone().sub(this.lastFocus);
         if (d.length() < 20) {
           this.camera.position.add(d);
           this.controls.target.add(d);
         }
+        // heading-relative presets turn with the walker
+        const dy = yaw - (this.lastYaw ?? yaw);
+        if ((this.preset === 'chase' || this.preset === 'front') && Math.abs(dy) > 1e-9 && Math.abs(dy) < 1) {
+          const off = this.camera.position.clone().sub(this.controls.target).applyAxisAngle(up, dy);
+          this.camera.position.copy(this.controls.target).add(off);
+        }
       }
       this.lastFocus = p;
+      this.lastYaw = yaw;
       this.sun.position.set(p.x + 20, p.y + 40, p.z + 15);
       this.sun.target.position.copy(p);
     }
@@ -338,9 +366,13 @@ export class StudioScene {
     const lane = this.lanes[focusIndex] ?? this.lanes[0];
     if (!lane) return;
     const fr = lane.run.result.sim.frames[0];
+    if (!fr) return;
     const bp = lane.bodyPos ?? fr.body.pos;
-    const p = new THREE.Vector3(bp[0], bp[1], bp[2] + lane.z);
+    const yaw = lane.yaw ?? fr.body.yaw ?? 0;
+    const p = new THREE.Vector3(bp[0], bp[1], bp[2] + lane.oz);
+    this.preset = preset;
     this.lastFocus = p.clone();
+    this.lastYaw = yaw;
     const s = Math.max(10, lane.run.spec.body.size[0] * 1.6 + lane.run.spec.body.rideHeight * 1.5);
     const spread = this.lanes.length > 1 ? (this.laneZ(this.lanes.length - 1)) : 0;
     const offsets = {
@@ -350,7 +382,12 @@ export class StudioScene {
       top: [0.01, s * 2.2 + spread, 0],
       chase: [-s * 1.3, s * 0.55, s * 0.15],
     };
-    const o = offsets[preset] ?? offsets.iso;
+    let o = offsets[preset] ?? offsets.iso;
+    // chase and front are relative to the walker's heading; the others stay world-aligned for comparing lanes
+    if (preset === 'chase' || preset === 'front') {
+      const v = new THREE.Vector3(...o).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+      o = [v.x, v.y, v.z];
+    }
     const target = p.clone();
     if (spread && preset !== 'front' && preset !== 'chase') target.z = this.lanes[0].z + spread / 2 + 0;
     this.controls.target.copy(target);

@@ -1,5 +1,6 @@
 package com.lbogerd.walkers;
 
+import com.lbogerd.walkers.registry.ModBlocks;
 import com.mojang.logging.LogUtils;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModList;
@@ -12,6 +13,7 @@ public final class Walkers {
     public static final Logger LOG = LogUtils.getLogger();
 
     public Walkers(IEventBus modBus) {
+        ModBlocks.register(modBus);
         ModList mods = ModList.get();
         LOG.info("Walkers loading with create {}, sable {}, aeronautics {}",
                 version(mods, "create"), version(mods, "sable"), version(mods, "aeronautics"));
