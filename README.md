@@ -16,6 +16,7 @@ npm test
 - `walkers/*.json`: walker designs (format in `docs/walker-spec.md`)
 - `config/targets.json`: the shared bar every walker is judged against. **This is the file to agree on.**
 - `config/cost-model.json`: server-cost coefficients (placeholders until calibrated, see `docs/model.md`)
+- `docs/decisions.md`: settled design decisions for the mod. **Read before building anything**
 - `mod/`: the NeoForge 1.21.1 mod itself (Create + Sable + Aeronautics). See `mod/README.md`
 - `reference/`: pinned source checkouts of Create, Sable and Aeronautics (`npm run reference`). Local reading material only: this project never contributes upstream to those or any other dependency
 - `AGENTS.md`: how a coding agent should showcase a design

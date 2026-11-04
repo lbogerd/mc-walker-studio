@@ -77,6 +77,9 @@ and three.js code. `src/view/` is browser-only.
 
 ## The mod (`mod/`)
 
+**Read `docs/decisions.md` first.** It records settled design decisions (hull physics, contraption legs,
+block-built legs, v1 scope, controls, balance, speed). Build on them; don't reopen them without the user.
+
 The real NeoForge 1.21.1 mod lives in `mod/` (Java 21, Gradle; details in `mod/README.md`). The dev box has
 no GPU set up, so verify mod changes headlessly:
 
