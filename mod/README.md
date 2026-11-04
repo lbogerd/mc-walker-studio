@@ -60,7 +60,7 @@ Things that make physics tests work (all already set up):
 | 4 m/s sideways shove | peaks at 0.23 b, returns to within 0.001 b, level |
 | Bearing-driven arm built inside the hull's plot | becomes a colliding Sable kinematic body, rotates, rides along |
 | That arm swinging into a free block on a pillar | block knocked 5.2 b (control without the arm: 0.002 b) |
-| Hull turned 90° and moved 3 b, then the arm built | block in the new swing path knocked 4.1 b; block where the unmoved arm would swing: 0.002 b |
+| Arm built, then the hull turned 90° and moved 3 b | block in the arm's new swing path knocked 4.7 b; block in its old path: 0.002 b |
 | Simulated Throttle Lever / Steering Wheel | read correctly at runtime |
 
 Gotchas found on the way:

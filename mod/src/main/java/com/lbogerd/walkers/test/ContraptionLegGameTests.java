@@ -137,27 +137,17 @@ public final class ContraptionLegGameTests {
     }
 
     /**
-     * The leg's collision must follow the hull wherever it goes. After assembly the hull is turned 90° and
-     * moved 3 blocks; then the leg is built. A free block in the arm's *new* swing path must be knocked away,
-     * and a control block where an unmoved leg would have swung must stay put.
+     * An existing leg must follow the hull when it moves. The leg is built and confirmed as a Sable kinematic
+     * body first; then the hull is turned 90° and moved 3 blocks (suspension anchors reset). Only then are the
+     * free blocks placed: one in the arm's *new* swing path must be knocked away, and a control where the
+     * arm swung before the move must stay put.
      */
-    @GameTest(template = "arena", timeoutTicks = 220)
-    public static void contraptionLegCollidesWhereTheMovedHullIs(GameTestHelper helper) {
-        SuspensionGameTests.Rig rig = SuspensionGameTests.buildAndAssemble(helper, false);
+    @GameTest(template = "arena", timeoutTicks = 240)
+    public static void existingLegFollowsTheHullWhenItMoves(GameTestHelper helper) {
+        SuspensionGameTests.Rig rig = SuspensionGameTests.buildAndAssemble(helper, true);
         ServerLevel level = helper.getLevel();
-        // hull centre (7.5, ·, 7.5) → (4.5, ·, 7.5), turned +90° about y: plot +z (the arm's side) now faces world +x,
-        // so the pivot moves from (7.5, ·, 10.5) to (7.5, ·, 7.5) and the arm swings in the y–z plane at x ∈ [7, 8).
-        Vector3d pos = new Vector3d(rig.subLevel().logicalPose().position()).add(-3, 0, 0);
-        SubLevelContainer.getContainer(level).physicsSystem().getPipeline()
-                .teleport(rig.subLevel(), pos, new Quaterniond().rotateY(Math.PI / 2));
-        SuspensionGameTests.configureSuspension(rig);
-
         BlockPos c = rig.plotController();
         BlockPos motor = c.offset(0, 0, 1), bearing = c.offset(0, 0, 2), anchor = c.offset(0, 0, 3);
-        ServerSubLevel target = freeBlockOnPillar(helper, new BlockPos(7, 5, 8));   // ~1–1.5 b from the new pivot, inside the swing
-        ServerSubLevel control = freeBlockOnPillar(helper, new BlockPos(9, 5, 10)); // where the old one would swing
-        final Vector3d targetStart = new Vector3d(), controlStart = new Vector3d();
-        helper.runAfterDelay(4, () -> { targetStart.set(target.logicalPose().position()); controlStart.set(control.logicalPose().position()); });
         helper.runAfterDelay(5, () -> {
             List<BlockPos> arm = List.of(anchor, anchor.below(), anchor.below(2));
             arm.forEach(p -> level.setBlockAndUpdate(p, Blocks.ANDESITE.defaultBlockState()));
@@ -165,12 +155,37 @@ public final class ContraptionLegGameTests {
             level.setBlockAndUpdate(bearing, AllBlocks.MECHANICAL_BEARING.getDefaultState().setValue(BearingBlock.FACING, Direction.SOUTH));
             level.setBlockAndUpdate(motor, AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.SOUTH));
         });
-        helper.runAfterDelay(150, () -> {
-            double tMoved = target.logicalPose().position().distance(targetStart);
-            double cMoved = control.logicalPose().position().distance(controlStart);
-            Walkers.LOG.info("[leg] moved hull: target block moved {} b, control block moved {} b, hull at {}", tMoved, cMoved, rig.subLevel().logicalPose().position());
-            if (tMoved < 0.5) helper.fail("The leg on the moved hull didn't hit the block in its new path (%.2f b)".formatted(tMoved));
-            else if (cMoved > 0.1) helper.fail("The control block where the unmoved leg would swing moved %.2f b".formatted(cMoved));
+        final ServerSubLevel[] blocks = new ServerSubLevel[2];
+        final Vector3d targetStart = new Vector3d(), controlStart = new Vector3d();
+        helper.runAfterDelay(30, () -> {
+            List<ControlledContraptionEntity> found = level.getEntitiesOfClass(ControlledContraptionEntity.class, new AABB(anchor).inflate(4));
+            if (found.isEmpty() || !((KinematicContraption) found.getFirst()).sable$isValid()) {
+                helper.fail("Leg wasn't a live Sable kinematic body before the move");
+                return;
+            }
+            // Before: hull centre (7.5, ·, 7.5), arm pivot at (7.5, ·, 10.5) swinging in the x–y plane.
+            // After: hull centre (4.5, ·, 7.5) turned +90° about y, so the pivot is at (7.5, ·, 7.5) and the arm
+            // swings in the y–z plane at x ∈ [7, 8).
+            Vector3d pos = new Vector3d(rig.subLevel().logicalPose().position()).add(-3, 0, 0);
+            SubLevelContainer.getContainer(level).physicsSystem().getPipeline()
+                    .teleport(rig.subLevel(), pos, new Quaterniond().rotateY(Math.PI / 2));
+            SuspensionGameTests.configureSuspension(rig); // re-anchor the feet at the new spot
+        });
+        helper.runAfterDelay(32, () -> {
+            blocks[0] = freeBlockOnPillar(helper, new BlockPos(7, 5, 8));  // in the new swing path
+            blocks[1] = freeBlockOnPillar(helper, new BlockPos(9, 5, 10)); // in the old swing path
+        });
+        helper.runAfterDelay(36, () -> {
+            targetStart.set(blocks[0].logicalPose().position());
+            controlStart.set(blocks[1].logicalPose().position());
+        });
+        helper.runAfterDelay(170, () -> {
+            if (blocks[0] == null) return;
+            double tMoved = blocks[0].logicalPose().position().distance(targetStart);
+            double cMoved = blocks[1].logicalPose().position().distance(controlStart);
+            Walkers.LOG.info("[leg] hull moved under an existing leg: target moved {} b, control moved {} b", tMoved, cMoved);
+            if (tMoved < 0.5) helper.fail("The leg didn't follow the hull: block in its new path moved only %.2f b".formatted(tMoved));
+            else if (cMoved > 0.1) helper.fail("Something still swings through the old path: control moved %.2f b".formatted(cMoved));
             else helper.succeed();
         });
     }

@@ -106,4 +106,5 @@ need a stabilizer. A walker that deliberately trades speed for stability overrid
    `mod/README.md`, "Spike findings".*
 6. Mod spike: a Create contraption leg attached to a moving sub-level (D2). *Done, works: a bearing-driven
    arm assembled inside the hull's plot is a colliding Sable kinematic body that follows the hull, and it
-   knocks a free block 5.2 b (control without the leg: 0.002 b).*
+   knocks a free block 5.2 b (control without the leg: 0.002 b). When the hull is moved and turned under an
+   existing leg, the leg's collision follows it.*
