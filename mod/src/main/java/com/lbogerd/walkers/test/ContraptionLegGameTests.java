@@ -7,6 +7,7 @@ import com.simibubi.create.content.contraptions.bearing.BearingBlock;
 import com.simibubi.create.content.contraptions.glue.SuperGlueEntity;
 import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
 import dev.ryanhcode.sable.api.SubLevelAssemblyHelper;
+import dev.ryanhcode.sable.api.sublevel.SubLevelContainer;
 import dev.ryanhcode.sable.api.sublevel.KinematicContraption;
 import dev.ryanhcode.sable.companion.math.BoundingBox3i;
 import dev.ryanhcode.sable.sublevel.ServerSubLevel;
@@ -19,6 +20,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
+import org.joml.Quaterniond;
 import org.joml.Vector3d;
 
 import java.util.List;
@@ -71,15 +73,14 @@ public final class ContraptionLegGameTests {
             Vector3d physicsPos = new Vector3d(kc.sable$getPosition());
             Vector3d pivot = new Vector3d(anchor.getX() + 0.5, anchor.getY() + 0.5, anchor.getZ() + 0.5);
             double trackErr = physicsPos.distance(pivot);
-            Vector3d worldPos = rig.subLevel().logicalPose().transformPosition(new Vector3d(physicsPos));
+
             double[] m = SuspensionGameTests.measure(rig);
-            Walkers.LOG.info("[leg] valid={} collides={} angle {}→{} trackErr={} world={} hull height {} tilt {}°",
-                    kc.sable$isValid(), kc.sable$shouldCollide(), angleAt[0], angleAt[1], trackErr, worldPos, m[0] - groundY, m[1]);
+            Walkers.LOG.info("[leg] valid={} collides={} angle {}→{} trackErr={} hull height {} tilt {}°",
+                    kc.sable$isValid(), kc.sable$shouldCollide(), angleAt[0], angleAt[1], trackErr, m[0] - groundY, m[1]);
             if (!kc.sable$isValid()) helper.fail("Leg contraption is not a valid Sable kinematic body");
             else if (!kc.sable$shouldCollide()) helper.fail("Leg contraption doesn't collide");
             else if (Math.abs(angleAt[1] - angleAt[0]) < 1) helper.fail("Leg didn't rotate (%.1f° → %.1f°)".formatted(angleAt[0], angleAt[1]));
             else if (trackErr > 3) helper.fail("Leg physics body is %.2f b from its pivot (arm is 3 long)".formatted(trackErr));
-            else if (worldPos.distance(rig.subLevel().logicalPose().position()) > 6) helper.fail("Leg isn't next to the hull in world space: " + worldPos);
             else if (Math.abs(m[0] - groundY - SuspensionGameTests.RIDE) > 0.5) helper.fail("Hull height %.2f with the leg attached".formatted(m[0] - groundY));
             else if (m[1] > 10) helper.fail("Hull tilted %.1f° with the leg attached".formatted(m[1]));
             else helper.succeed();
@@ -133,5 +134,53 @@ public final class ContraptionLegGameTests {
             else if (!withLeg && moved > 0.1) helper.fail("Without a leg the free block still moved %.2f b".formatted(moved));
             else helper.succeed();
         });
+    }
+
+    /**
+     * The leg's collision must follow the hull wherever it goes. After assembly the hull is turned 90° and
+     * moved 3 blocks; then the leg is built. A free block in the arm's *new* swing path must be knocked away,
+     * and a control block where an unmoved leg would have swung must stay put.
+     */
+    @GameTest(template = "arena", timeoutTicks = 220)
+    public static void contraptionLegCollidesWhereTheMovedHullIs(GameTestHelper helper) {
+        SuspensionGameTests.Rig rig = SuspensionGameTests.buildAndAssemble(helper, false);
+        ServerLevel level = helper.getLevel();
+        // hull centre (7.5, ·, 7.5) → (4.5, ·, 7.5), turned +90° about y: plot +z (the arm's side) now faces world +x,
+        // so the pivot moves from (7.5, ·, 10.5) to (7.5, ·, 7.5) and the arm swings in the y–z plane at x ∈ [7, 8).
+        Vector3d pos = new Vector3d(rig.subLevel().logicalPose().position()).add(-3, 0, 0);
+        SubLevelContainer.getContainer(level).physicsSystem().getPipeline()
+                .teleport(rig.subLevel(), pos, new Quaterniond().rotateY(Math.PI / 2));
+        SuspensionGameTests.configureSuspension(rig);
+
+        BlockPos c = rig.plotController();
+        BlockPos motor = c.offset(0, 0, 1), bearing = c.offset(0, 0, 2), anchor = c.offset(0, 0, 3);
+        ServerSubLevel target = freeBlockOnPillar(helper, new BlockPos(7, 5, 8));   // ~1–1.5 b from the new pivot, inside the swing
+        ServerSubLevel control = freeBlockOnPillar(helper, new BlockPos(9, 5, 10)); // where the old one would swing
+        final Vector3d targetStart = new Vector3d(), controlStart = new Vector3d();
+        helper.runAfterDelay(4, () -> { targetStart.set(target.logicalPose().position()); controlStart.set(control.logicalPose().position()); });
+        helper.runAfterDelay(5, () -> {
+            List<BlockPos> arm = List.of(anchor, anchor.below(), anchor.below(2));
+            arm.forEach(p -> level.setBlockAndUpdate(p, Blocks.ANDESITE.defaultBlockState()));
+            level.addFreshEntity(new SuperGlueEntity(level, new AABB(anchor.below(2)).minmax(new AABB(anchor))));
+            level.setBlockAndUpdate(bearing, AllBlocks.MECHANICAL_BEARING.getDefaultState().setValue(BearingBlock.FACING, Direction.SOUTH));
+            level.setBlockAndUpdate(motor, AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.SOUTH));
+        });
+        helper.runAfterDelay(150, () -> {
+            double tMoved = target.logicalPose().position().distance(targetStart);
+            double cMoved = control.logicalPose().position().distance(controlStart);
+            Walkers.LOG.info("[leg] moved hull: target block moved {} b, control block moved {} b, hull at {}", tMoved, cMoved, rig.subLevel().logicalPose().position());
+            if (tMoved < 0.5) helper.fail("The leg on the moved hull didn't hit the block in its new path (%.2f b)".formatted(tMoved));
+            else if (cMoved > 0.1) helper.fail("The control block where the unmoved leg would swing moved %.2f b".formatted(cMoved));
+            else helper.succeed();
+        });
+    }
+
+    /** A gold block on a stone pillar, assembled into its own sub-level so it can be knocked around. */
+    static ServerSubLevel freeBlockOnPillar(GameTestHelper helper, BlockPos top) {
+        for (int y = 1; y < top.getY(); y++) helper.setBlock(new BlockPos(top.getX(), y, top.getZ()), Blocks.STONE);
+        helper.setBlock(top, Blocks.GOLD_BLOCK);
+        BlockPos abs = helper.absolutePos(top);
+        return SubLevelAssemblyHelper.assembleBlocks(helper.getLevel(), abs, List.of(abs),
+                new BoundingBox3i(abs.getX(), abs.getY(), abs.getZ(), abs.getX(), abs.getY(), abs.getZ()));
     }
 }

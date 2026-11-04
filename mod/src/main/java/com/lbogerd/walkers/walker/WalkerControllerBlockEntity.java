@@ -144,8 +144,12 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
         ((ClipContextExtension) ctx).sable$setIgnoredSubLevel(subLevel);
         BlockHitResult hit = level.clip(ctx);
         if (hit.getType() == HitResult.Type.MISS) return Double.POSITIVE_INFINITY;
-        // hit location is in world space; bring it into the hull frame
-        Vector3d hitLocal = subLevel.logicalPose().transformPositionInverse(JOMLConversion.toJOML(hit.getLocation()));
+        // A hit on another sub-level (a ship, a platform) comes back in *that* sub-level's plot space:
+        // project it to world space first, then bring it into this hull's frame (as Offroad's wheels do).
+        Vector3d hitWorld = JOMLConversion.toJOML(hit.getLocation());
+        var hitSubLevel = Sable.HELPER.getContaining(level, hit.getLocation());
+        if (hitSubLevel != null) hitWorld = hitSubLevel.logicalPose().transformPosition(hitWorld);
+        Vector3d hitLocal = subLevel.logicalPose().transformPositionInverse(hitWorld);
         double d = hipLocal.y - hitLocal.y;
         return d > 1e-4 ? d : Double.POSITIVE_INFINITY;
     }

@@ -248,21 +248,27 @@ export function normalizeSpec(raw, { id = 'walker', sharedTargets = {} } = {}) {
  * of the longest window where that many feet are planted. When the walker stops, the gait clock runs
  * on until it reaches such a window and then freezes, so it stands on all feet.
  */
-export function restWindows(legs, duty, samples = 1000) {
-  const count = (P) => legs.reduce((a, l) => a + (((P + (l.phase ?? 0)) % 1 + 1) % 1 < duty ? 1 : 0), 0);
-  const c = [];
-  let best = 0;
-  for (let i = 0; i < samples; i++) { c.push(count(i / samples)); best = Math.max(best, c[i]); }
-  // longest circular run with c == best
-  let runStart = -1, bestLen = 0, bestStart = 0;
-  for (let i = 0; i < 2 * samples; i++) {
-    if (c[i % samples] === best) {
-      if (runStart < 0) runStart = i;
-      const L = i - runStart + 1;
-      if (L > bestLen && L <= samples) { bestLen = L; bestStart = runStart; }
-    } else runStart = -1;
+/**
+ * The phase at which the most feet are planted, for standing still. Uses the exact touchdown (frac = 0)
+ * and liftoff (frac = duty) phases of every leg, with the simulation's convention (planted while
+ * frac(u + phase) < duty), and returns the middle of the widest interval with the most feet down, so the
+ * rest phase is always strictly inside a window where that many feet really are planted.
+ */
+export function restWindows(legs, duty) {
+  const fr = (x) => ((x % 1) + 1) % 1;
+  const count = (P) => legs.reduce((a, l) => a + (fr(P + (l.phase ?? 0)) < duty ? 1 : 0), 0);
+  const cuts = [...new Set(legs.flatMap((l) => [fr(-(l.phase ?? 0)), fr(duty - (l.phase ?? 0))]).map((x) => Math.round(x * 1e9) / 1e9))].sort((a, b) => a - b);
+  if (cuts.length === 0) return { planted: count(0), phase: 0, width: 1 };
+  let best = { planted: -1, phase: 0, width: 0 };
+  for (let i = 0; i < cuts.length; i++) {
+    const a = cuts[i], b = i + 1 < cuts.length ? cuts[i + 1] : cuts[0] + 1;
+    const width = b - a;
+    if (width <= 1e-9) continue;
+    const mid = fr(a + width / 2);
+    const planted = count(mid);
+    if (planted > best.planted || (planted === best.planted && width > best.width)) best = { planted, phase: mid, width };
   }
-  return { planted: best, phase: ((bestStart + bestLen / 2) / samples) % 1, width: bestLen / samples };
+  return best;
 }
 
 function buildBom(body, legs, parts) {

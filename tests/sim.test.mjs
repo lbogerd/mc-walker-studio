@@ -170,3 +170,42 @@ test('contraption legs are the default representation (D2)', () => {
   assert.equal(normalizeSpec(raw).implementation.legRepresentation, 'contraption');
   for (const id of listWalkers()) assert.equal(load(id).implementation.legRepresentation, 'contraption', id);
 });
+
+// ---- regressions from review round 1 ----
+
+test('suspension follower stays finite for overdamped and stiff settings', () => {
+  const raw = readJson(resolveWalker('quad-strider').path);
+  for (const suspension of [{ frequency: 10, damping: 3 }, { frequency: 10, damping: 10 }, { frequency: 0.2, damping: 0 }]) {
+    const spec = normalizeSpec({ ...raw, physics: { ...raw.physics, suspension } }, { sharedTargets: targets });
+    assert.deepEqual(spec.errors, []);
+    const r = simulate(spec, makeTerrain('stairs'));
+    for (const f of r.frames) assert.ok(f.body.pos.every(Number.isFinite), `non-finite hull at tick ${f.t} for ${JSON.stringify(suspension)}`);
+    assert.ok(Number.isFinite(r.summary.bob) && Number.isFinite(r.summary.trackErrMax ?? 0));
+  }
+});
+
+test('rest phase lies inside a window where that many feet really are planted', () => {
+  const raw = readJson(resolveWalker('quad-strider').path);
+  for (const duty of [0.501, 0.55, 0.6, 0.75]) {
+    const spec = normalizeSpec({ ...raw, gait: { ...raw.gait, duty } }, { sharedTargets: targets });
+    const planted = spec.legs.filter((l) => (((spec.gait.restPhase + l.phase) % 1) + 1) % 1 < duty).length;
+    assert.equal(planted, spec.gait.restPlanted, `duty ${duty}: rest phase ${spec.gait.restPhase}`);
+    // standing still from the start must end with that many feet planted
+    const r = simulate(spec, makeTerrain('flat'), { commands: [{ ticks: 200, throttle: 0, steer: 0 }], ticks: 200 });
+    assert.equal(r.frames.at(-1).legs.filter((l) => l.stance).length, spec.gait.restPlanted, `duty ${duty}`);
+  }
+});
+
+test('foothold planning is causal: identical inputs up to a tick give identical frames up to it', () => {
+  const spec = load('quad-strider');
+  const prefix = [{ ticks: 100, throttle: 1, steer: 0 }];
+  const a = simulate(spec, makeTerrain('flat'), { commands: [...prefix, { ticks: 200, throttle: 1, steer: 1 }], ticks: 300 });
+  const b = simulate(spec, makeTerrain('flat'), { commands: [...prefix, { ticks: 200, throttle: 1, steer: -1 }], ticks: 300 });
+  for (let t = 0; t <= 100; t++) {
+    const fa = a.frames[t], fb = b.frames[t];
+    assert.deepEqual(fb.body.pos, fa.body.pos, `hull differs at tick ${t}`);
+    fa.legs.forEach((l, i) => assert.deepEqual(fb.legs[i].foot, l.foot, `leg ${i} foot differs at tick ${t}`));
+  }
+  // and the futures do diverge
+  assert.notDeepEqual(a.frames[300].body.pos, b.frames[300].body.pos);
+});

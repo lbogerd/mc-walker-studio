@@ -273,8 +273,35 @@ function planPath(spec, legs, commands, tA, tB, x0) {
     while (lo < hi) { const m = (lo + hi) >> 1; if (PH[m] >= P) hi = m; else lo = m + 1; }
     return tA + lo - 1 + (P - PH[lo - 1]) / (PH[lo] - PH[lo - 1]);
   };
+  /**
+   * Causal prediction (what a live controller can know): from the state at integer tick tk, hold the command
+   * given at tk and integrate forward with the same accel limits until the gait clock reaches goalPhase.
+   * Returns the predicted pose there. If the clock stops first (walker settles), returns where it stops.
+   */
+  const predict = (tk, goalPhase) => {
+    const j = Math.max(0, Math.min(N - 1, tk - tA));
+    let x = X[j], z = Z[j], yaw = YAW[j], ph = PH[j], vv = V[j], ww = W[j];
+    if (goalPhase <= ph) return { x, z, yaw };
+    const [tv, tw] = target(tA + j);
+    for (let n = 0; n < 20000; n++) {
+      [vv, ww] = saturate(towards(vv, tv, aLin), towards(ww, tw, aYaw));
+      let dP;
+      if (vv === 0 && ww === 0 && tv === 0 && tw === 0) {
+        if (planted(ph) >= restN) dP = 0;
+        else dP = Math.min(settle / T, ph + frac(spec.gait.restPhase - ph) - ph);
+      } else dP = Math.max(activity(vv, ww), settle) / T;
+      if (dP <= 0) return { x, z, yaw };
+      const a = ph + dP >= goalPhase ? (goalPhase - ph) / dP : 1; // fraction of this tick used
+      const hh = heading(yaw + (ww * a) / 2);
+      x += vv * a * hh[0]; z += vv * a * hh[2]; yaw += ww * a; ph += dP * a;
+      if (a < 1) return { x, z, yaw };
+    }
+    return { x, z, yaw };
+  };
+  /** Gait clock rate over the last tick (causal). */
+  const rateAt = (t) => { const j = Math.max(1, Math.min(N - 1, t - tA)); return PH[j] - PH[j - 1]; };
   return {
-    poseAt, phaseAt, timeAtPhase, vTop, wTop,
+    poseAt, phaseAt, timeAtPhase, predict, rateAt, vTop, wTop,
     at: (t) => { const j = idx(t); return { x: X[j], z: Z[j], yaw: YAW[j], phase: PH[j], v: V[j], w: W[j], activity: ACT[j] }; },
   };
 }
@@ -299,20 +326,30 @@ export function simulate(spec, terrain, opts = {}) {
   // ---- foothold planner (memoised per leg & stance index) ----
   const fhCache = legs.map(() => new Map());
   let probeCount = 0;
-  const foothold = (li, k) => {
-    let f = fhCache[li].get(k);
-    if (f) return f;
+  // A foothold for stance k is decided when the leg lifts off for the swing before it (end of stance k-1),
+  // from the state known at that tick (causal; see planPath.predict). Before that, callers that need a
+  // provisional guess (sway look-ahead) get one from the current state, which is not cached.
+  const plan = (li, k, tDecide) => {
     const leg = legs[li];
     const P0 = k - leg.phase; // gait clock when stance k begins
-    const tMid = path.timeAtPhase(P0 + duty / 2);
-    const mid = path.poseAt(tMid);
+    const mid = path.predict(tDecide, P0 + duty / 2);
     const w = bodyToWorld(flatPose(mid), leg.footLocal);
-    f = planFoothold(terrain, w[0], w[2], search, mid.yaw);
-    probeCount += f.probes;
+    const f = planFoothold(terrain, w[0], w[2], search, mid.yaw);
     f.k = k;
     f.yaw = mid.yaw;
     f.tStart = path.timeAtPhase(P0);
     f.tEnd = path.timeAtPhase(P0 + duty);
+    f.tDecided = tDecide;
+    return f;
+  };
+  const liftTick = (li, k) => Math.ceil(path.timeAtPhase(k - 1 - legs[li].phase + duty) - 1e-9);
+  const foothold = (li, k, asOf = Infinity) => {
+    let f = fhCache[li].get(k);
+    if (f) return f;
+    const tl = Math.max(-warm, liftTick(li, k));
+    if (tl > asOf) return plan(li, k, asOf); // not decided yet: provisional, not cached
+    f = plan(li, k, Number.isFinite(tl) ? tl : -warm);
+    probeCount += f.probes;
     fhCache[li].set(k, f);
     return f;
   };
@@ -336,9 +373,11 @@ export function simulate(spec, terrain, opts = {}) {
   const wn = 2 * Math.PI * susp.frequency, zeta = susp.damping;
   const SUB = 8, hSub = 1 / TPS / SUB;
   let act = null;
+  // Backward-Euler substeps: stable for any frequency and damping ratio (overdamped settings just settle).
+  const followDen = 1 + 2 * zeta * wn * hSub + wn * wn * hSub * hSub;
   const follow = (x, xv, target) => {
     for (let i = 0; i < SUB; i++) {
-      xv += (wn * wn * (target - x) - 2 * zeta * wn * xv) * hSub;
+      xv = (xv + wn * wn * (target - x) * hSub) / followDen;
       x += xv * hSub;
     }
     return [x, xv];
@@ -402,12 +441,12 @@ export function simulate(spec, terrain, opts = {}) {
     if (comShift > 0) {
       const sets = [];
       for (let j = 0; j <= 3; j++) {
-        const ph = path.phaseAt(t + (j / 3) * horizon);
+        const ph = P.phase + path.rateAt(t) * (j / 3) * horizon; // extrapolated from the current rate
         const pts = [];
         legs.forEach((leg, li) => {
           const u = ph + leg.phase + EPS;
           if (frac(u) < duty) {
-            const f = foothold(li, Math.floor(u));
+            const f = foothold(li, Math.floor(u), t);
             if (!f.void) pts.push([f.x, f.z]);
           }
         });

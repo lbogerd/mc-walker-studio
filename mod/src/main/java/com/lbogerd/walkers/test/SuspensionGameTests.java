@@ -69,17 +69,20 @@ public final class SuspensionGameTests {
         ServerSubLevel subLevel = SubLevelAssemblyHelper.assembleBlocks(level, anchor, blocks, bounds);
         BlockPos plotController = subLevel.getPlot().getCenterBlock();
 
-        if (withSuspension) {
-            if (!(subLevel.getLevel().getBlockEntity(plotController) instanceof WalkerControllerBlockEntity be)) {
-                throw new IllegalStateException("Walker Controller block entity not found in the plot at " + plotController);
-            }
-            // hips at the centres of the four corner blocks' bottom faces (controller centre is 1.5 above the hull bottom)
-            List<Vector3d> hips = List.of(
-                    new Vector3d(-2, -1.5, -2), new Vector3d(2, -1.5, -2),
-                    new Vector3d(-2, -1.5, 2), new Vector3d(2, -1.5, 2));
-            be.configure(new Suspension(RIDE, 1.5, 0.8, 0.5, 5.0), hips);
+        Rig rig = new Rig(subLevel, plotController);
+        if (withSuspension) configureSuspension(rig);
+        return rig;
+    }
+
+    /** Hips at the centres of the four corner blocks' bottom faces (controller centre is 1.5 above the hull bottom). */
+    static void configureSuspension(Rig rig) {
+        if (!(rig.subLevel().getLevel().getBlockEntity(rig.plotController()) instanceof WalkerControllerBlockEntity be)) {
+            throw new IllegalStateException("Walker Controller block entity not found in the plot at " + rig.plotController());
         }
-        return new Rig(subLevel, plotController);
+        List<Vector3d> hips = List.of(
+                new Vector3d(-2, -1.5, -2), new Vector3d(2, -1.5, -2),
+                new Vector3d(-2, -1.5, 2), new Vector3d(2, -1.5, 2));
+        be.configure(new Suspension(RIDE, 1.5, 0.8, 0.5, 5.0), hips);
     }
 
     static void floor(GameTestHelper helper) {
@@ -176,6 +179,38 @@ public final class SuspensionGameTests {
             else if (moving > 0.02) helper.fail("Hull still moving at %.3f b/s".formatted(moving));
             else if (mm[1] > 3) helper.fail("Hull tilted %.1f° after the shove".formatted(mm[1]));
             else if (Math.abs(mm[0] - groundY - RIDE) > 0.3) helper.fail("Hull height %.2f after the shove".formatted(mm[0] - groundY));
+            else helper.succeed();
+        });
+    }
+
+    /**
+     * Ground that is itself a sub-level (another ship, a platform): Sable returns those ray hits in the other
+     * sub-level's plot space, so the controller must project them to world space before measuring.
+     * A 9×1×9 platform sub-level rests on the floor; the hull should ride 3 blocks above the platform's top.
+     */
+    @GameTest(template = "arena", timeoutTicks = 200)
+    public static void suspensionStandsOnAnotherSubLevel(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        floor(helper);
+        List<BlockPos> platform = new ArrayList<>();
+        for (int x = 3; x <= 11; x++)
+            for (int z = 3; z <= 11; z++) {
+                BlockPos p = new BlockPos(x, 1, z);
+                helper.setBlock(p, Blocks.STONE);
+                platform.add(helper.absolutePos(p));
+            }
+        BlockPos pMin = helper.absolutePos(new BlockPos(3, 1, 3)), pMax = helper.absolutePos(new BlockPos(11, 1, 11));
+        SubLevelAssemblyHelper.assembleBlocks(level, helper.absolutePos(new BlockPos(7, 1, 7)), platform, new BoundingBox3i(
+                Math.min(pMin.getX(), pMax.getX()), pMin.getY(), Math.min(pMin.getZ(), pMax.getZ()),
+                Math.max(pMin.getX(), pMax.getX()), pMax.getY(), Math.max(pMin.getZ(), pMax.getZ())));
+        Rig rig = buildAndAssemble(helper, true);
+        double platformTop = helper.absolutePos(new BlockPos(0, 2, 0)).getY();
+        helper.runAfterDelay(140, () -> {
+            double[] m = measure(rig);
+            double height = m[0] - platformTop;
+            Walkers.LOG.info("[suspension] on platform sub-level: hull bottom {} above platform (target {}), tilt {}°", height, RIDE, m[1]);
+            if (Math.abs(height - RIDE) > 0.3) helper.fail("On a platform sub-level the hull is %.2f above it, expected %.1f ± 0.3".formatted(height, RIDE));
+            else if (m[1] > 5) helper.fail("Hull tilted %.1f° on the platform".formatted(m[1]));
             else helper.succeed();
         });
     }

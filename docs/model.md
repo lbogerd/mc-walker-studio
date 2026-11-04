@@ -17,9 +17,13 @@ followed exactly in x, z and yaw.
 
 1. **Leg phase.** `φ = frac(Φ + phase)`. The foot is planted while `φ < duty` and swings otherwise. At full
    speed `Φ = t / cycleTicks`, as before.
-2. **Footholds.** One per step, planned at the column under the neutral foot position at mid-stance, using
-   the hull pose (position and heading) that pass 1 predicts for the moment Φ reaches mid-stance. Turning
-   in place therefore steps the feet around the hull, and reversing steps them backwards. Feet stand on
+2. **Footholds.** One per step, at the column under the neutral foot position at mid-stance. Planning is
+   **causal**, like a live controller: the foothold for a stance is decided on the tick the leg lifts off
+   for the swing before it, from the state known then. The planner holds the command given on that tick,
+   integrates forward with the same acceleration limits until Φ reaches mid-stance, and places the foot
+   under that predicted hull pose (position and heading). Steering after liftoff therefore only affects
+   later steps. Identical inputs up to a tick produce identical simulations up to that tick (tested).
+   Turning in place steps the feet around the hull, and reversing steps them backwards. Feet stand on
    block tops (integer heights). With `footholdSearch`, a small grid around the nominal point (aligned with
    the hull's heading) is probed. Void is rejected, block edges are penalised and the closest valid point
    wins (white footprints in the view).
@@ -30,10 +34,12 @@ followed exactly in x, z and yaw.
    above it), low-pass filtered by `bodySmoothing`. With `bodyAdapt: "pitch"` the hull also pitches and
    rolls to a least-squares fit of that ground.
 5. **Sway (`comShift`).** The hull is shifted toward the point that maximises the worst support margin over
-   the next swing window (coarse-to-fine grid search). A crawl gait needs this to be statically stable.
+   the next swing window (coarse-to-fine grid search). A crawl gait needs this to be statically stable. The
+   look-ahead is causal too: it extrapolates Φ at the current rate and uses provisional footholds, based on
+   the current state, for steps that haven't been decided yet.
 6. **Actual hull (suspension, D1).** The real hull is pushed by the legs, so its height, pitch and roll
    follow the planned values as a damped spring (`physics.suspension`: frequency, damping ratio; 8
-   sub-steps per tick). The legs are solved from this actual pose, so lag shows up as extra reach or slip.
+   backward-Euler sub-steps per tick, which stay stable for any accepted frequency and damping). The legs are solved from this actual pose, so lag shows up as extra reach or slip.
 7. **IK.** An optional horizontal coxa, then analytic two-bone IK with a knee pole hint. If the target is out
    of reach the foot is clamped. The gap is reported as foot slip and the leg turns red.
 

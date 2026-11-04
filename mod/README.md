@@ -47,21 +47,26 @@ Things that make physics tests work (all already set up):
   foot touched down; it acts at center-of-mass height so it doesn't tip the hull. Gains scale with the hull's
   effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
 - `control/SimulatedControls`: reads Simulated's Steering Wheel (`[-1, 1]`) and Throttle Lever (`[0, 1]`).
-- Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests`.
+- Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests` (11 in total).
 
 ## Spike findings (decisions D1, D2, D5)
 
 | Test | Result |
 |---|---|
 | Hull on 4 spring hips, ride height 3.0 | settles at 3.02 b, 0.0° tilt |
+| Same hull standing on another sub-level (a 9×9 platform) | 3.02 b above the platform, level |
 | Same hull without suspension (control) | falls onto the floor |
 | Heavy 4-block load on one corner | 0.57° tilt |
 | 4 m/s sideways shove | peaks at 0.23 b, returns to within 0.001 b, level |
 | Bearing-driven arm built inside the hull's plot | becomes a colliding Sable kinematic body, rotates, rides along |
 | That arm swinging into a free block on a pillar | block knocked 5.2 b (control without the arm: 0.002 b) |
+| Hull turned 90° and moved 3 b, then the arm built | block in the new swing path knocked 4.1 b; block where the unmoved arm would swing: 0.002 b |
 | Simulated Throttle Lever / Steering Wheel | read correctly at runtime |
 
 Gotchas found on the way:
+- A ray hit on another sub-level comes back in **that sub-level's plot space**. Project it to world space
+  (`hitSubLevel.logicalPose().transformPosition`) before using it, or a walker standing on a ship
+  sees no ground.
 - `Sable.HELPER.getVelocity(level, pos)` (two arguments) **writes the result into `pos`**. Use the
   three-argument overload with a separate destination vector.
 - A contraption's kinematic body position (`sable$getPosition()`) is in the parent hull's *plot* space,
