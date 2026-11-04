@@ -56,7 +56,7 @@ const server = createServer(async (req, res) => {
   let p = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '');
   if (p === '' || p.endsWith('/')) p += 'index.html';
   const file = join(ROOT, p);
-  if (relative(ROOT, file).startsWith('..') || p.split(/[/\\]/).some((s) => s.startsWith('.')) || /^(mod|node_modules)([/\\]|$)/.test(p)) {
+  if (relative(ROOT, file).startsWith('..') || p.split(/[/\\]/).some((s) => s.startsWith('.')) || /^(mod|node_modules|reference)([/\\]|$)/.test(p)) {
     res.writeHead(403);
     return res.end('forbidden');
   }

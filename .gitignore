@@ -1,2 +1,5 @@
 node_modules/
 report*.md
+
+# reference checkouts (see reference/README.md)
+reference/*/

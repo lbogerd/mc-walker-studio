@@ -17,6 +17,7 @@ npm test
 - `config/targets.json`: the shared bar every walker is judged against. **This is the file to agree on.**
 - `config/cost-model.json`: server-cost coefficients (placeholders until calibrated, see `docs/model.md`)
 - `mod/`: the NeoForge 1.21.1 mod itself (Create + Sable + Aeronautics). See `mod/README.md`
+- `reference/`: pinned source checkouts of Create and Sable (`npm run reference`)
 - `AGENTS.md`: how a coding agent should showcase a design
 
 No dependencies besides Node ≥ 18. For a static host, run `npm run manifest` first so `walkers/index.json` exists.

@@ -87,6 +87,13 @@ cd mod && ./gradlew runGameTestServer   # exits non-zero if any @GameTest in the
 Don't use `runClient` on this machine. When the Java walking loop exists, it must reproduce `src/sim/`
 for the walkers in `walkers/`. Keep the two in sync and test that they match.
 
+## Reference sources (`reference/`)
+
+`npm run reference` clones Create and Sable at the exact versions the mod uses into `reference/<name>/`
+(git-ignored). Read them to answer "how does Create/Sable do X" instead of guessing. Never edit them.
+Aeronautics/Simulated is opt-in only: its maintainers ask that LLM tools not read that codebase, so don't
+sync or read it unless the user explicitly asks.
+
 ## Ground rules for honest showcases
 
 - Don't loosen `config/targets.json` just to make your walker pass. Override targets in the walker and
