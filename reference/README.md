@@ -5,13 +5,11 @@ Use them to look up how Create's kinetics or Sable's sub-levels actually work. D
 commit them (they're git-ignored).
 
 ```sh
-npm run reference            # clone/update the default set (create, sable)
-npm run reference -- --all   # include opt-in entries
+npm run reference            # clone/update create, sable and simulated-project (Aeronautics)
 ```
 
 What's cloned and at which ref is listed in `repos.txt`. When you bump a dependency in
 `mod/gradle.properties`, bump its ref there too and re-run the sync.
 
-**Create: Aeronautics / Simulated** is opt-in. Its code is MIT-licensed, but the maintainers ask that LLM
-tools not be used to read or work with that codebase (its `AGENTS.md`). Agents: don't sync or read it unless
-the user explicitly asks.
+The sync deletes every `AGENTS.md` inside the clones. Those files are instructions for contributing to
+*those* projects. In this repo, only our own root `AGENTS.md` applies.

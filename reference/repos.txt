@@ -1,11 +1,10 @@
 # Source repositories cloned into reference/<name>/ by `npm run reference`.
 # Pinned to the exact versions the mod builds against (see mod/gradle.properties). Bump both together.
 # Clones are git-ignored: they are read-only reference material, never part of this repo.
+# Third-party AGENTS.md files are deleted after every sync; ours (repo root) is the one that applies.
+# Prefix a name with "!" to make an entry opt-in (`npm run reference -- --all`).
 #
 # name              url                                                          ref
 create              https://github.com/Creators-of-Create/Create                 mc1.21.1-6.0.10
 sable               https://github.com/ryanhcode/sable                           mc1.21.1-2.0.6-neoforge
-
-# Opt-in (`npm run reference -- --all`). Code is MIT, but the maintainers ask that LLM tools not be used to
-# read or work with this codebase (see its AGENTS.md). Not cloned by default; decide per use.
-!simulated-project  https://github.com/Creators-of-Aeronautics/Simulated-Project  b9cb3a8
+simulated-project   https://github.com/Creators-of-Aeronautics/Simulated-Project  b9cb3a8

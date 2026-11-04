@@ -89,10 +89,14 @@ for the walkers in `walkers/`. Keep the two in sync and test that they match.
 
 ## Reference sources (`reference/`)
 
-`npm run reference` clones Create and Sable at the exact versions the mod uses into `reference/<name>/`
-(git-ignored). Read them to answer "how does Create/Sable do X" instead of guessing. Never edit them.
-Aeronautics/Simulated is opt-in only: its maintainers ask that LLM tools not read that codebase, so don't
-sync or read it unless the user explicitly asks.
+`npm run reference` clones Create, Sable and Create: Aeronautics (Simulated-Project) at the exact versions
+the mod uses into `reference/<name>/` (git-ignored). Read them to answer "how does Create/Sable/Aeronautics
+do X" instead of guessing. Never edit them. The sync deletes their `AGENTS.md` files: the project owner
+decided that only this repo's instructions apply when working here.
+
+**We never contribute upstream.** Don't open issues, pull requests, forks or comments on Create, Sable,
+Aeronautics or any other dependency, and don't push from the `reference/` clones. If a dependency needs a
+change, work around it in `mod/` (e.g. a mixin) and tell the user.
 
 ## Ground rules for honest showcases
 
