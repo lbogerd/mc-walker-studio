@@ -1,0 +1,21 @@
+{
+  "name": "My Walker",
+  "description": "One sentence: what is this design for?",
+  "author": "agent-or-person",
+  "proposal": {
+    "summary": "What this showcase is trying to demonstrate.",
+    "decisions": [],
+    "openQuestions": []
+  },
+  "body": { "size": [7, 2, 5], "rideHeight": 3 },
+  "legDefaults": { "segments": [3, 3], "knee": "back" },
+  "legs": [
+    { "id": "FL", "mount": [2.5, 0, -2.5], "neutral": [0, -1], "mirror": true },
+    { "id": "HL", "mount": [-2.5, 0, -2.5], "neutral": [0, -1], "mirror": true }
+  ],
+  "gait": { "preset": "alternating", "duty": 0.6, "stride": 3, "stepHeight": 1, "swing": "arc", "bodyAdapt": "level", "footholdSearch": null },
+  "drive": { "rpm": 32, "revsPerCycle": 1 },
+  "physics": { "support": "static" },
+  "implementation": { "legRepresentation": "renderOnly" },
+  "targets": {}
+}

@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Walker Studio</title>
+  <link rel="icon" href="assets/icon.svg" />
+  <script type="importmap">
+    { "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    } }
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111316; --surface: #181b1f; --surface-2: #20242a; --border: #2c3138;
+      --text-1: #eef0f2; --text-2: #b4bac2; --text-3: #7d858f;
+      --grid: #2a2f36; --track: #23282e; --accent: #c9a227;
+      --pass: #3fb950; --warn: #d29922; --fail: #f85149;
+      --pass-bg: #12301b; --warn-bg: #33270b; --fail-bg: #3a1514;
+      font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif;
+    }
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg: #eceef1; --surface: #fbfbfc; --surface-2: #f1f3f5; --border: #d6dae0;
+        --text-1: #15181c; --text-2: #4a525c; --text-3: #7a828c;
+        --grid: #e3e6ea; --track: #eceff2; --accent: #9a7a10;
+        --pass: #1a7f37; --warn: #9a6700; --fail: #cf222e;
+        --pass-bg: #dcf5e3; --warn-bg: #fbf0d0; --fail-bg: #fde2e1;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text-1); }
+    body { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; overflow: hidden; }
+    button, select, input { font: inherit; color: inherit; }
+    button { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+    button:hover { border-color: var(--text-3); }
+    button.on { border-color: var(--accent); color: var(--text-1); box-shadow: inset 0 0 0 1px var(--accent); }
+    select { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 6px; }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+    header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    header h1 { font-size: 14px; margin: 0 6px 0 0; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+    header h1 img { width: 20px; height: 20px; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); cursor: pointer; }
+    .chip.focus { border-color: var(--text-2); }
+    .chip i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    .chip .x { border: 0; background: none; padding: 0 4px; color: var(--text-3); }
+    .chip .mod { color: var(--accent); font-size: 11px; }
+    .spacer { flex: 1; }
+    .group { display: flex; gap: 4px; align-items: center; }
+    .group label { color: var(--text-3); font-size: 12px; margin-right: 2px; }
+
+    main { display: grid; grid-template-columns: 1fr 420px; min-height: 0; }
+    #viewport { position: relative; min-width: 0; min-height: 0; }
+    #viewport canvas { display: block; width: 100%; height: 100%; }
+    .hud { position: absolute; left: 10px; top: 10px; background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; pointer-events: none; max-width: 60%; }
+    .hud .row { display: flex; gap: 8px; align-items: center; white-space: nowrap; }
+    .hud i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+    .legend { position: absolute; right: 10px; bottom: 10px; background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--text-2); pointer-events: none; }
+    .legend span { display: inline-flex; gap: 5px; align-items: center; margin-right: 10px; }
+    .legend b { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
+    #errors { position: absolute; left: 10px; bottom: 10px; max-width: 60%; }
+    .err { background: var(--fail-bg); color: var(--text-1); border: 1px solid var(--fail); border-radius: 8px; padding: 8px 10px; margin-top: 6px; white-space: pre-wrap; }
+
+    aside { background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+    .tabs { display: flex; border-bottom: 1px solid var(--border); }
+    .tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 9px 4px; color: var(--text-3); border-bottom: 2px solid transparent; }
+    .tabs button.on { color: var(--text-1); border-bottom-color: var(--accent); box-shadow: none; }
+    .panel { overflow: auto; padding: 12px; flex: 1; }
+    .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-3); margin: 16px 0 8px; font-weight: 600; }
+    .panel h2:first-child { margin-top: 0; }
+    .panel p { margin: 6px 0; color: var(--text-2); }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--text-3); font-weight: 500; font-size: 12px; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    tr.grp td { color: var(--text-3); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding-top: 10px; border-bottom: 0; }
+    .st { display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: 5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .st.pass { background: var(--pass-bg); } .st.pass::before { content: '✓'; color: var(--pass); font-weight: 700; }
+    .st.warn { background: var(--warn-bg); } .st.warn::before { content: '!'; color: var(--warn); font-weight: 700; }
+    .st.fail { background: var(--fail-bg); } .st.fail::before { content: '✕'; color: var(--fail); font-weight: 700; }
+    .st.info { color: var(--text-2); }
+    .matrix td { cursor: pointer; text-align: center; }
+    .matrix td.cur { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .matrix td:first-child { text-align: left; cursor: default; }
+    .help { color: var(--text-3); cursor: help; }
+    ul.plain { margin: 4px 0; padding-left: 18px; color: var(--text-2); }
+    .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; }
+    .kv div:nth-child(odd) { color: var(--text-3); }
+    .tweak { display: grid; grid-template-columns: 110px 1fr 56px; gap: 6px 8px; align-items: center; }
+    .tweak input[type=range] { width: 100%; accent-color: var(--accent); }
+    .tweak output { text-align: right; font-variant-numeric: tabular-nums; }
+    .btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+    .ev { cursor: pointer; } .ev:hover td { background: var(--surface-2); }
+    .bar { display: flex; height: 10px; border-radius: 3px; overflow: hidden; gap: 2px; margin: 6px 0; }
+    .note { border-left: 3px solid var(--warn); padding: 4px 8px; background: var(--warn-bg); border-radius: 0 6px 6px 0; color: var(--text-1); margin: 8px 0; }
+
+    footer { background: var(--surface); border-top: 1px solid var(--border); display: grid; grid-template-columns: 360px 1fr; grid-template-rows: auto 150px; }
+    .transport { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .transport .readout { min-width: 230px; color: var(--text-2); }
+    #gait, #timeline { width: 100%; height: 100%; display: block; }
+    .chartbox { position: relative; min-width: 0; }
+    .chartbox + .chartbox { border-left: 1px solid var(--border); }
+    #tooltip { position: fixed; z-index: 10; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; pointer-events: none; font-size: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+    #tooltip i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 6px; }
+    #tooltip .tt-h { color: var(--text-3); margin-bottom: 3px; }
+
+    body.nohud header, body.nohud aside, body.nohud footer { display: none; }
+    body.nohud main { grid-template-columns: 1fr; }
+    @media (max-width: 900px) {
+      body { overflow: auto; height: auto; }
+      main { grid-template-columns: 1fr; }
+      #viewport { height: 60vh; }
+      aside { border-left: 0; border-top: 1px solid var(--border); max-height: none; }
+      footer { grid-template-columns: 1fr; grid-template-rows: auto 140px 150px; }
+      .chartbox + .chartbox { border-left: 0; border-top: 1px solid var(--border); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1><img src="assets/icon.svg" alt="" />Walker Studio</h1>
+    <div class="chips" id="chips"></div>
+    <select id="addWalker" title="Add a walker to compare"><option value="">+ compare…</option></select>
+    <div class="group"><label for="terrain">Course</label><select id="terrain"></select></div>
+    <span class="spacer"></span>
+    <div class="group" id="cams"></div>
+    <div class="group" id="toggles"></div>
+  </header>
+  <main>
+    <div id="viewport">
+      <div class="hud" id="hud"></div>
+      <div class="legend">
+        <span><b style="background:#4ade80"></b>support polygon OK</span>
+        <span><b style="background:#facc15"></b>below target</span>
+        <span><b style="background:#f87171"></b>CoM outside</span>
+        <span><b style="background:#fff"></b>foothold moved by search</span>
+        <span><b style="background:#ff6b6b"></b>leg can’t reach</span>
+      </div>
+      <div id="errors"></div>
+    </div>
+    <aside>
+      <div class="tabs" id="tabs"></div>
+      <div class="panel" id="panel"></div>
+    </aside>
+  </main>
+  <footer>
+    <div class="transport">
+      <button id="restart" title="Restart (Home)">⏮</button>
+      <button id="stepBack" title="Back 1 tick (←)">◀︎</button>
+      <button id="play" title="Play / pause (Space)">⏸</button>
+      <button id="stepFwd" title="Forward 1 tick (→)">▶︎</button>
+      <select id="speed" title="Playback speed">
+        <option value="0.1">0.1×</option><option value="0.25">0.25×</option><option value="0.5">0.5×</option>
+        <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+      </select>
+      <span class="readout mono" id="readout"></span>
+      <span class="spacer"></span>
+      <div class="group" id="metricTabs"></div>
+    </div>
+    <div class="chartbox"><canvas id="gait"></canvas></div>
+    <div class="chartbox"><canvas id="timeline"></canvas></div>
+  </footer>
+  <div id="tooltip" hidden></div>
+  <script type="module" src="src/view/app.js"></script>
+</body>
+</html>

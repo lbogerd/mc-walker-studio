@@ -1,0 +1,83 @@
+{
+  "name": "Quad Crawler",
+  "description": "Same frame as the Quad Strider but with a wave gait and hull sway (comShift): one leg up at a time and the hull leans toward the support triangle. Statically stable, half the speed.",
+  "color": "#d95926",
+  "proposal": {
+    "summary": "Shows the stability vs speed trade-off on an identical frame.",
+    "decisions": [
+      "Same hull and mounts as quad-strider; gait, RPM and leg length differ.",
+      "Hull sway (comShift: 1) is done by the controller so players never tune it by hand.",
+      "Legs are 0.5 b longer per segment than the strider: the sway moves the hips and 3+3 legs over-reach on flat ground."
+    ],
+    "openQuestions": [
+      "Is ~1.6 b/s too slow to feel good as a vehicle?"
+    ]
+  },
+  "body": {
+    "size": [
+      9,
+      3,
+      5
+    ],
+    "rideHeight": 4.5,
+    "blocks": 90
+  },
+  "legDefaults": {
+    "segments": [
+      3.5,
+      3.5
+    ]
+  },
+  "legs": [
+    {
+      "id": "FL",
+      "mount": [
+        3.5,
+        0,
+        -2.5
+      ],
+      "neutral": [
+        0.3,
+        -1.3
+      ],
+      "knee": "back",
+      "mirror": true
+    },
+    {
+      "id": "HL",
+      "mount": [
+        -3.5,
+        0,
+        -2.5
+      ],
+      "neutral": [
+        -0.3,
+        -1.3
+      ],
+      "knee": "forward",
+      "mirror": true
+    }
+  ],
+  "gait": {
+    "preset": "wave",
+    "duty": 0.82,
+    "stride": 3,
+    "stepHeight": 1.4,
+    "swing": "box",
+    "bodyAdapt": "pitch",
+    "footholdSearch": {
+      "radius": 1
+    },
+    "comShift": 1
+  },
+  "drive": {
+    "rpm": 32,
+    "revsPerCycle": 1
+  },
+  "physics": {
+    "support": "static"
+  },
+  "implementation": {
+    "legRepresentation": "renderOnly"
+  }
+}

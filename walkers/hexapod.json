@@ -1,0 +1,21 @@
+{
+  "name": "Hexapod",
+  "description": "Insect layout with coxa + femur + tibia legs and a tripod gait. Wide, low, always three feet down.",
+  "color": "#199e70",
+  "proposal": {
+    "summary": "All-terrain workhorse: wide stance, low hull, tripod gait.",
+    "decisions": ["3-segment legs (coxa/femur/tibia) with knees pointing up and out."],
+    "openQuestions": ["Six legs × 3 segments: what does that cost as sub-levels vs render-only?"]
+  },
+  "body": { "size": [7, 2, 5], "rideHeight": 2.5, "blocks": 70 },
+  "legDefaults": { "segments": [1, 2.5, 3], "knee": "out" },
+  "legs": [
+    { "id": "FL", "mount": [2.5, 0.5, -2.5], "neutral": [0.6, -2.2], "mirror": true },
+    { "id": "ML", "mount": [0, 0.5, -2.5], "neutral": [0, -2.4], "mirror": true },
+    { "id": "HL", "mount": [-2.5, 0.5, -2.5], "neutral": [-0.6, -2.2], "mirror": true }
+  ],
+  "gait": { "preset": "alternating", "duty": 0.55, "stride": 2.6, "stepHeight": 1.2, "swing": "box", "bodyAdapt": "pitch", "footholdSearch": { "radius": 1 } },
+  "drive": { "rpm": 40, "revsPerCycle": 1 },
+  "physics": { "support": "static" },
+  "implementation": { "legRepresentation": "renderOnly" }
+}

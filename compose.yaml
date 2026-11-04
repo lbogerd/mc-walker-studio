@@ -1,0 +1,20 @@
+name: walker-studio
+services:
+  web:
+    image: node:24-alpine
+    user: "1000:1000"
+    working_dir: /app
+    command: ["node", "tools/serve.mjs", "--host", "0.0.0.0", "--port", "5177"]
+    restart: unless-stopped
+    init: true
+    ports:
+      - "127.0.0.1:3850:5177"
+    volumes:
+      - .:/app:ro
+      - ./walkers:/app/walkers:rw
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5177/api/walkers').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3

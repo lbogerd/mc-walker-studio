@@ -1,0 +1,26 @@
+[
+  {
+    "id": "biped",
+    "name": "Biped",
+    "description": "Two-legged mech. Never statically stable; only works if the controller holds the hull. Useful as a stress test for the kinematic-support decision.",
+    "color": "#9085e9"
+  },
+  {
+    "id": "hexapod",
+    "name": "Hexapod",
+    "description": "Insect layout with coxa + femur + tibia legs and a tripod gait. Wide, low, always three feet down.",
+    "color": "#199e70"
+  },
+  {
+    "id": "quad-crawler",
+    "name": "Quad Crawler",
+    "description": "Same frame as the Quad Strider but with a wave gait and hull sway (comShift): one leg up at a time and the hull leans toward the support triangle. Statically stable, half the speed.",
+    "color": "#d95926"
+  },
+  {
+    "id": "quad-strider",
+    "name": "Quad Strider",
+    "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; relies on the mod holding the hull kinematically because two feet down is never statically stable.",
+    "color": "#3987e5"
+  }
+]

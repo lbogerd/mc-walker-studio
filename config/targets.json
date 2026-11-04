@@ -1,0 +1,17 @@
+{
+  "_readme": "Shared design targets every walker is checked against. This file is the thing to agree on: change a number here in a PR and every walker's pass/fail updates. A walker may override individual targets in its own \"targets\" block (shown as 'override' in the UI). Use null to disable a check.",
+  "speedMin": 2.5,
+  "stabilityMarginMin": 0.3,
+  "stanceMin": 2,
+  "reachMax": 0.95,
+  "footErrorMax": 0.05,
+  "collisionsMax": 0,
+  "bodyBobMax": 0.3,
+  "bodyPitchMaxDeg": 20,
+  "jointSpeedMaxDegS": 900,
+  "stressMax": 4096,
+  "rpmMax": 256,
+  "serverUsMax": 250,
+  "walkersPerServerMin": 20,
+  "netKBpsMax": 8
+}

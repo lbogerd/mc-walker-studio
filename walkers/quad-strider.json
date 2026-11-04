@@ -1,0 +1,26 @@
+{
+  "name": "Quad Strider",
+  "description": "Mech-style quadruped. Trot gait (diagonal pairs) for speed; relies on the mod holding the hull kinematically because two feet down is never statically stable.",
+  "color": "#3987e5",
+  "proposal": {
+    "summary": "Fast travel walker. Trades static stability for ~3 b/s.",
+    "decisions": [
+      "Hull is held kinematically by the walker controller (Sable body does not tip).",
+      "Front knees bend back, hind knees bend forward, for a readable silhouette."
+    ],
+    "openQuestions": [
+      "Is kinematic support acceptable, or must every walker be statically stable?",
+      "Do we want automatic foothold search on by default?"
+    ]
+  },
+  "body": { "size": [9, 3, 5], "rideHeight": 4.5, "blocks": 90 },
+  "legDefaults": { "segments": [3, 3] },
+  "legs": [
+    { "id": "FL", "mount": [3.5, 0, -2.5], "neutral": [0, -1], "knee": "back", "mirror": true },
+    { "id": "HL", "mount": [-3.5, 0, -2.5], "neutral": [0, -1], "knee": "forward", "mirror": true }
+  ],
+  "gait": { "preset": "alternating", "duty": 0.55, "stride": 4, "stepHeight": 1.4, "swing": "arc", "bodyAdapt": "pitch", "footholdSearch": { "radius": 1 } },
+  "drive": { "rpm": 48, "revsPerCycle": 1 },
+  "physics": { "support": "kinematic" },
+  "implementation": { "legRepresentation": "renderOnly", "syncEveryTicks": 1 }
+}

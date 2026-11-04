@@ -1,0 +1,31 @@
+{
+  "_readme": "Server-cost model used to estimate the tick cost of ONE walker. All coefficients are PLACEHOLDERS until calibrated: profile a walker in the sandbox with spark (/spark profiler --timeout 60), divide the walker-related self-time by ticks, and adjust the numbers below until `npm run check` matches. Units: microseconds of server thread per tick.",
+  "calibrated": false,
+  "tickBudgetMs": 50,
+  "shareOfTickForWalkers": 0.1,
+  "perWalkerBaseUs": 25,
+  "perLegIkUs": 3,
+  "perFootholdProbeUs": 1.5,
+  "perGroundCheckUs": 0.8,
+  "bodySubLevelPerBlockUs": 0.12,
+  "legRepresentation": {
+    "renderOnly": {
+      "_about": "Legs are pure client-side render; server only tracks foot targets and syncs joint angles.",
+      "perLegUs": 2,
+      "perSegmentUs": 0,
+      "netBytesPerLegPerSync": 16
+    },
+    "contraption": {
+      "_about": "Each leg is a Create-style contraption entity (collidable, moves its blocks).",
+      "perLegUs": 18,
+      "perSegmentUs": 6,
+      "netBytesPerLegPerSync": 40
+    },
+    "subLevel": {
+      "_about": "Each leg segment is its own Sable sub-level with physics/collision. Most faithful, most expensive.",
+      "perLegUs": 45,
+      "perSegmentUs": 30,
+      "netBytesPerLegPerSync": 96
+    }
+  }
+}
