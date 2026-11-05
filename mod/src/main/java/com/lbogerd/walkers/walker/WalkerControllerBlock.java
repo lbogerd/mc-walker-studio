@@ -1,5 +1,11 @@
 package com.lbogerd.walkers.walker;
 
+import com.lbogerd.walkers.registry.ModBlocks;
+import com.simibubi.create.content.kinetics.base.HorizontalKineticBlock;
+import com.simibubi.create.foundation.block.IBE;
+import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.block.entity.BlockEntityType;
+
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -16,9 +22,10 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 /**
  * The walker's brain. Placed on the hull; drives the hull through {@link WalkerControllerBlockEntity}.
  * {@link #FACING} is the hull's forward direction (+x in walker specs): the direction the player looks
- * when placing it.
+ * when placing it. It is a Create stress consumer (decision D7): a shaft goes into its <b>back</b> face; the
+ * shaft's RPM sets the walker's top speed and its direction sets forward or reverse.
  */
-public class WalkerControllerBlock extends Block implements EntityBlock {
+public class WalkerControllerBlock extends HorizontalKineticBlock implements IBE<WalkerControllerBlockEntity> {
     public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
 
     public WalkerControllerBlock(Properties properties) {
@@ -27,27 +34,27 @@ public class WalkerControllerBlock extends Block implements EntityBlock {
     }
 
     @Override
-    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
-        builder.add(FACING);
-    }
-
-    @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
         return defaultBlockState().setValue(FACING, context.getHorizontalDirection());
     }
 
     @Override
-    protected BlockState rotate(BlockState state, Rotation rotation) {
-        return state.setValue(FACING, rotation.rotate(state.getValue(FACING)));
+    public Direction.Axis getRotationAxis(BlockState state) {
+        return state.getValue(FACING).getAxis();
     }
 
     @Override
-    protected BlockState mirror(BlockState state, Mirror mirror) {
-        return state.rotate(mirror.getRotation(state.getValue(FACING)));
+    public boolean hasShaftTowards(LevelReader world, BlockPos pos, BlockState state, Direction face) {
+        return face == state.getValue(FACING).getOpposite();
     }
 
     @Override
-    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        return new WalkerControllerBlockEntity(pos, state);
+    public Class<WalkerControllerBlockEntity> getBlockEntityClass() {
+        return WalkerControllerBlockEntity.class;
+    }
+
+    @Override
+    public BlockEntityType<? extends WalkerControllerBlockEntity> getBlockEntityType() {
+        return ModBlocks.WALKER_CONTROLLER_BE.get();
     }
 }

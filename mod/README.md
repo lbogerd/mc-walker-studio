@@ -63,10 +63,10 @@ Things that make physics tests work (all already set up):
   `scan(level, controller, walkerBlocks)` returns a `LegScan`: the `HullFrame`, the hull / actuator / per-leg
   partition, one `MeasuredLeg` per actuator, errors and warnings. `collect(level, controller, max)` flood-fills a
   walker's blocks. `WalkerSpecJson.toSpecJson(scan, options)` writes a spec the studio loads.
-- `sim/`: the studio's walking loop in plain Java (see "Walking loop port" below). Not wired into the
-  block entity yet.
+- `sim/`: the studio's walking loop in plain Java (see "Walking loop port" below).
+- `walker/WalkDriver`, `WalkFrame`, `WorldTerrain`: walk mode (see "Walking" below).
 - Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests`,
-  `LegScannerGameTests`, `GyroStabilizerGameTests` (32 game tests), plus JUnit tests for `sim/` (`./gradlew test`).
+  `LegScannerGameTests`, `GyroStabilizerGameTests`, `WalkingGameTests` (41 game tests), plus JUnit tests for `sim/` (`./gradlew test`).
 
 ## Building legs (decision D3)
 
@@ -157,6 +157,45 @@ on the first tick, leg and field that differs by more than 1e-6 (discrete values
 observed deviation is the fixtures' 5e-10 rounding. Other traps the port handles: `Math.round` (JS rounds
 halves up), `toFixed` and number-to-string in messages (`SimMath.toFixed`, `jsString`), sort comparators
 (`a - b`, where -0 equals 0), `%` (same in both), and `Infinity` (fixtures store it as a string).
+
+## Walking (steps 2 and 4: decisions D1, D4, D5, D7)
+
+`WalkerControllerBlockEntity.configureWalker(specJson, originPlot, forward, suspension)` switches a controller to
+walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's bottom-face centre in plot space.
+
+- **Every server tick:** the controller turns its controls into a command, and `WalkDriver` advances the ported
+  walking loop (`sim.GaitController`) one tick. The loop is causal, so footholds are decided at lift-off from
+  what's known then. On its first tick the driver fixes the walker's course frame in the world (`WalkFrame`).
+  `WorldTerrain` feeds it the real ground: the first block with a collision shape in each column.
+- **Every physics tick:** each **planted** leg pushes its hip toward the plan's hip position. It uses a
+  spring-damper toward the planned position and velocity, plus a share of the weight. Legs push but never pull,
+  and a friction cone limits the horizontal force (μ = 1). Swinging legs don't push. So the hull is only held
+  where feet are planted, and an unstable gait needs a Gyro Stabilizer.
+- **Controls (D5, D7):** the controller is a Create kinetic block. Its shaft goes into the **back** face.
+  - A Creative Motor set to a positive speed walks forward. The direction is relative to the controller's
+    facing; reverse the shaft to back up.
+  - throttle = Throttle Lever (0–1, full if there's none) × min(1, |RPM| / the spec's `drive.rpm`) × direction.
+  - steer = Steering Wheel angle ÷ its max angle (−1–1). Positive turns left, as in the studio.
+  - No rotation, or an overstressed network, means the walker stands.
+  - Stress impact per RPM comes from the spec: legs × `stressPerLegPerRpm` + mass × `stressPerBlockPerRpm`.
+- **Not saved:** the gait itself. After a reload the walker restarts standing wherever its hull is.
+
+| Walking test (crawling quad, 5×5 hull) | Result |
+|---|---|
+| Walk forward 11 s | 11.54 b against a plan of 11.57 b; 0.16 b off the plan, height within 0.05 b |
+| Turn in place | 158° against a plan of 157°, 0.69 b drift |
+| Walk, then stop | stops where the plan stops (0.00002 b/s), 4 feet planted |
+| Motor at the design RPM (32), full lever | 10.2 b forward in 10 s |
+| Half the design RPM | 4.9 b (half speed) |
+| Lever at 0 | stands still |
+| Reversed shaft | 10.5 b backward |
+| Steering Wheel held at full lock | steer 1.0, turns 139° left in place |
+| Stress | 19.1 SU/RPM, matching the spec formula |
+
+**Finding: a plan can ask more than the feet can give.** With full hull sway (`comShift: 1`) the plan needed
+~30 b/s² of sideways acceleration. Planted feet couldn't push that hard (friction), so the real hull swung up to
+±1.9 b and ±40° around the plan. With `comShift: 0.4` (12 b/s²) it tracked within 0.16 b. The studio now
+reports this as "Peak hull acceleration" (target 20 b/s², provisional).
 
 ## Spike findings (decisions D1, D2, D5)
 

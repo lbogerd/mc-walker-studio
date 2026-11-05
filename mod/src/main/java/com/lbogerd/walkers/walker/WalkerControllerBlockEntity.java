@@ -18,6 +18,10 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.world.level.ClipContext;
+import com.lbogerd.walkers.control.SimulatedControls;
+import com.lbogerd.walkers.sim.Scenarios;
+import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
+import com.simibubi.create.foundation.blockEntity.behaviour.BlockEntityBehaviour;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
@@ -38,7 +42,7 @@ import java.util.List;
  * the hip is damped like a planted foot. Forces are applied as impulses at the hips, so uneven support
  * tilts the hull just like real legs would.
  */
-public class WalkerControllerBlockEntity extends BlockEntity implements BlockEntitySubLevelActor {
+public class WalkerControllerBlockEntity extends KineticBlockEntity implements BlockEntitySubLevelActor {
     private final List<Vector3d> hipOffsets = new ArrayList<>();
     private Suspension suspension = Suspension.DEFAULT;
     private final ForceTotal forces = new ForceTotal();
@@ -53,8 +57,83 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
     /** Walk mode (D1 + D4): the walking loop drives the legs. Null = plain suspension with fixed hips. */
     private WalkDriver walk;
 
+    /** Test/debug override of the controls; null = drive from the hull's controls and shaft (D5, D7). */
+    private Scenarios.Command manualCommand;
+    /** Control blocks found on the hull, rescanned every {@link #CONTROL_SCAN_TICKS}. */
+    private final List<BlockPos> controlBlocks = new ArrayList<>();
+    private int controlScanIn = 0;
+    static final int CONTROL_SCAN_TICKS = 20;
+    private float lastThrottle, lastSteer;
+
     public WalkerControllerBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlocks.WALKER_CONTROLLER_BE.get(), pos, state);
+    }
+
+    @Override
+    public void addBehaviours(List<BlockEntityBehaviour> behaviours) {}
+
+    /**
+     * Create stress impact per RPM (decision D7), from the walker's spec as in the studio:
+     * legs × stressPerLegPerRpm + mass × stressPerBlockPerRpm. Zero until a walker is configured.
+     */
+    @Override
+    public float calculateStressApplied() {
+        float impact = walk == null ? 0f : (float) stressImpactPerRpm(walk.spec);
+        this.lastStressApplied = impact;
+        return impact;
+    }
+
+    public static double stressImpactPerRpm(com.lbogerd.walkers.sim.WalkerSpec spec) {
+        return spec.legs.size() * spec.drive.stressPerLegPerRpm + spec.mass * spec.drive.stressPerBlockPerRpm;
+    }
+
+    private void refreshStress() {
+        if (level != null && !level.isClientSide && hasNetwork()) getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+    }
+
+    /** Override the controls with a fixed command (tests, debugging); null hands control back to the hull. */
+    public void setManualCommand(Scenarios.Command command) { this.manualCommand = command; }
+    public float lastThrottle() { return lastThrottle; }
+    public float lastSteer() { return lastSteer; }
+
+    /**
+     * The command the hull's controls give right now (D5 + D7):
+     * throttle = Throttle Lever (0–1, full if there's none) × min(1, |RPM| / design RPM) × sign(RPM),
+     * steer = Steering Wheel (−1–1, 0 if there's none). No rotation (or an overstressed network) means no command.
+     * Direction is relative to the controller's facing, so it doesn't depend on which way the hull points: a Creative
+     * Motor set to a positive speed on the back face walks forward. Reverse the shaft (e.g. a Gearshift) to back up.
+     */
+    Scenarios.Command commandFromControls(ServerSubLevel subLevel) {
+        if (walk == null || level == null) return Scenarios.Command.STOP;
+        if (--controlScanIn <= 0) { scanControls(subLevel); controlScanIn = CONTROL_SCAN_TICKS; }
+        float lever = Float.NaN, steer = 0;
+        for (BlockPos p : controlBlocks) {
+            BlockEntity be = level.getBlockEntity(p);
+            float t = SimulatedControls.throttle(be);
+            if (!Float.isNaN(t)) lever = Float.isNaN(lever) ? t : Math.max(lever, t);
+            float st = SimulatedControls.steer(be);
+            if (!Float.isNaN(st)) steer = st;
+        }
+        float speed = getSpeed();
+        if (speed == 0 || isOverStressed()) { lastThrottle = 0; lastSteer = 0; return Scenarios.Command.STOP; }
+        double designRpm = walk.spec.drive.rpm;
+        double rpmFactor = Math.min(1, Math.abs(speed) / designRpm);
+        // Create's speed is about the axis' positive direction; make it relative to the facing
+        var facing = getBlockState().getValue(WalkerControllerBlock.FACING);
+        double forwardSign = Math.signum(speed) * (facing.getAxisDirection() == net.minecraft.core.Direction.AxisDirection.POSITIVE ? 1 : -1);
+        lastThrottle = (float) ((Float.isNaN(lever) ? 1 : lever) * rpmFactor * forwardSign);
+        lastSteer = (float) (steer * rpmFactor);
+        return new Scenarios.Command(lastThrottle, lastSteer);
+    }
+
+    private void scanControls(ServerSubLevel subLevel) {
+        controlBlocks.clear();
+        var b = subLevel.getPlot().getBoundingBox();
+        for (BlockPos p : BlockPos.betweenClosed(b.minX(), b.minY(), b.minZ(), b.maxX(), b.maxY(), b.maxZ())) {
+            BlockEntity be = level.getBlockEntity(p);
+            if (be != null && (!Float.isNaN(SimulatedControls.throttle(be)) || !Float.isNaN(SimulatedControls.steer(be))))
+                controlBlocks.add(p.immutable());
+        }
     }
 
     public void configure(Suspension suspension, List<Vector3d> hipOffsets) {
@@ -77,6 +156,8 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
         this.suspension = suspension;
         this.hipOffsets.clear();
         this.anchors.clear();
+        this.controlScanIn = 0;
+        refreshStress();
         setChanged();
     }
 
@@ -84,7 +165,9 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
 
     @Override
     public void sable$tick(ServerSubLevel subLevel) {
-        if (walk != null && level != null) walk.tick(subLevel, level);
+        if (walk == null || level == null) return;
+        walk.setCommand(manualCommand != null ? manualCommand : commandFromControls(subLevel));
+        walk.tick(subLevel, level);
     }
 
     public Suspension suspension() { return suspension; }
@@ -184,8 +267,9 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
     }
 
     @Override
-    protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-        super.saveAdditional(tag, registries);
+    protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.write(tag, registries, clientPacket);
+        if (clientPacket) return; // clients don't need the walker state
         CompoundTag s = new CompoundTag();
         s.putDouble("RideHeight", suspension.rideHeight());
         s.putDouble("Frequency", suspension.frequency());
@@ -215,8 +299,9 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
     }
 
     @Override
-    protected void loadAdditional(CompoundTag tag, HolderLookup.Provider registries) {
-        super.loadAdditional(tag, registries);
+    protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
+        super.read(tag, registries, clientPacket);
+        if (clientPacket) return;
         if (tag.contains("Suspension", Tag.TAG_COMPOUND)) {
             CompoundTag s = tag.getCompound("Suspension");
             suspension = new Suspension(s.getDouble("RideHeight"), s.getDouble("Frequency"), s.getDouble("Damping"),

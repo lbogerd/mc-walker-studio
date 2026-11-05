@@ -98,6 +98,16 @@ stopping. Reverse uses the same speed scale.
 need a stabilizer. A walker that deliberately trades speed for stability overrides the target in its own
 `targets` block and explains why in `proposal.decisions`.
 
+## Progress after the follow-ups
+
+- **Java port (next-steps 1):** `mod/.../sim` reproduces `src/sim` (fixture tests, max |Δ| 5e-10).
+- **Hull driven by the walking loop (next-steps 2):** the real Sable hull walks, turns and stops on the plan.
+- **D3:** legs built from blocks are measured into spec data (`LegScanner`). Turning them into contraptions
+  and animating them is still to do.
+- **D5 + D7:** the Throttle Lever, the Steering Wheel and the shaft's RPM and direction drive the walker,
+  and its stress comes from its spec.
+- **D6:** see above.
+
 ## Follow-up work these decisions create
 
 1. Studio: add turning, reverse, start/stop and acceleration (D4), plus courses for them. *Done: command

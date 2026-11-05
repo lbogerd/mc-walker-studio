@@ -2,6 +2,13 @@ package com.lbogerd.walkers.test;
 
 import com.lbogerd.walkers.Walkers;
 import com.lbogerd.walkers.registry.ModBlocks;
+import com.simibubi.create.AllBlocks;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlock;
+import com.simibubi.create.content.kinetics.motor.CreativeMotorBlockEntity;
+import dev.simulated_team.simulated.content.blocks.steering_wheel.SteeringWheelBlockEntity;
+import dev.simulated_team.simulated.content.blocks.throttle_lever.ThrottleLeverBlockEntity;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import com.lbogerd.walkers.sim.Scenarios;
 import com.lbogerd.walkers.walker.Suspension;
 import com.lbogerd.walkers.walker.WalkDriver;
@@ -59,7 +66,9 @@ public final class WalkingGameTests {
         double yawWorld() { return WalkFrame.yawOf(subLevel.logicalPose().transformNormal(frame.localDirToPlot(1, 0, 0))); }
     }
 
-    static final int HULL_Y = 5, CX = 7, CZ = 40;
+    static final int HULL_Y = 5, CX = 7;
+    /** Start a little past the middle so both forward (−z) and backward walks stay on the 48-long track. */
+    static int CZ = 30;
 
     static Walker build(GameTestHelper helper) {
         for (int x = 0; x < 16; x++)
@@ -104,7 +113,7 @@ public final class WalkingGameTests {
     static void commands(GameTestHelper helper, Walker w, IntFunction<Scenarios.Command> schedule, int until) {
         for (int t = 0; t <= until; t++) {
             int tick = t;
-            helper.runAfterDelay(t, () -> w.drive().setCommand(schedule.apply(tick)));
+            helper.runAfterDelay(t, () -> w.be().setManualCommand(schedule.apply(tick)));
         }
     }
 
@@ -175,5 +184,102 @@ public final class WalkingGameTests {
         while (d > Math.PI) d -= 2 * Math.PI;
         while (d < -Math.PI) d += 2 * Math.PI;
         return d;
+    }
+
+    // ------------------------------------------------------------------ driving with the hull's controls (D5, D7)
+
+    /**
+     * The walker driven by its own controls: a Creative Motor at {@code rpm} feeding the controller's back face
+     * (south, since it faces north) and a Simulated Throttle Lever on the hull at {@code lever} (0–15).
+     */
+    static Walker driven(GameTestHelper helper, int rpm, int lever) {
+        Walker w = build(helper);
+        var level = helper.getLevel();
+        BlockPos c = w.be().getBlockPos();
+        level.setBlockAndUpdate(c.offset(0, 0, 1), AllBlocks.CREATIVE_MOTOR.getDefaultState().setValue(CreativeMotorBlock.FACING, Direction.NORTH));
+        if (level.getBlockEntity(c.offset(0, 0, 1)) instanceof CreativeMotorBlockEntity m) m.generatedSpeed.setValue(rpm);
+        level.setBlockAndUpdate(c.offset(1, 0, 0), BuiltInRegistries.BLOCK.get(ResourceLocation.parse("simulated:throttle_lever")).defaultBlockState());
+        helper.runAfterDelay(2, () -> {
+            if (level.getBlockEntity(c.offset(1, 0, 0)) instanceof ThrottleLeverBlockEntity t) t.setSignal(lever);
+        });
+        return w;
+    }
+
+    static void expectWalk(GameTestHelper helper, int rpm, int lever, double minWalked, double maxWalked) {
+        Walker w = driven(helper, rpm, lever);
+        trace(helper, w, "drive " + rpm + "rpm lever " + lever, 200);
+        helper.runAfterDelay(200, () -> {
+            Vector3d o = w.origin(), plan = w.drive().plannedOriginWorld();
+            double walked = w.start().z - o.z, posErr = Math.hypot(o.x - plan.x, o.z - plan.z);
+            Walkers.LOG.info("[walk] driven rpm={} lever={}: walked {} b, throttle {}, posErr {}, controller speed {} RPM, stress impact {} SU/RPM",
+                    rpm, lever, walked, w.be().lastThrottle(), posErr, w.be().getSpeed(), w.be().calculateStressApplied());
+            if (walked < minWalked || walked > maxWalked)
+                helper.fail("At %d RPM, lever %d, the walker moved %.2f b; expected %.1f..%.1f".formatted(rpm, lever, walked, minWalked, maxWalked));
+            else if (posErr > 0.6) helper.fail("Hull is %.2f b from the plan".formatted(posErr));
+            else helper.succeed();
+        });
+    }
+
+    /** Design RPM (32) and full lever: full speed, ~1.07 b/s × ~9 s. */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void drivesForwardAtDesignRpm(GameTestHelper helper) { expectWalk(helper, 32, 15, 7, 11); }
+
+    /** Half the design RPM: half the top speed (D7). */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void halfRpmWalksAtHalfSpeed(GameTestHelper helper) { expectWalk(helper, 16, 15, 3.5, 5.5); }
+
+    /** Lever at 0: the walker stands still even though the shaft turns. */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void leverAtZeroStandsStill(GameTestHelper helper) { expectWalk(helper, 32, 0, -0.2, 0.2); }
+
+    /** A reversed shaft walks backward. */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void reversedShaftWalksBackward(GameTestHelper helper) {
+        expectWalk(helper, -32, 15, -11, -7);
+    }
+
+    /** The walker is a Create stress consumer: impact per RPM from its spec (legs × 4 + mass × 0.05 by default). */
+    @GameTest(template = "track", timeoutTicks = 100)
+    public static void walkerDrawsStressFromItsSpec(GameTestHelper helper) {
+        Walker w = driven(helper, 32, 0);
+        helper.runAfterDelay(20, () -> {
+            double expected = WalkerControllerBlockEntity.stressImpactPerRpm(w.drive().spec);
+            double impact = w.be().calculateStressApplied();
+            Walkers.LOG.info("[walk] stress impact {} SU/RPM (spec {}), speed {} RPM, overstressed {}", impact, expected, w.be().getSpeed(), w.be().isOverStressed());
+            if (Math.abs(impact - expected) > 1e-3 || expected <= 0) helper.fail("Stress impact %.2f, expected %.2f".formatted(impact, expected));
+            else if (w.be().getSpeed() == 0) helper.fail("The controller isn't turning");
+            else helper.succeed();
+        });
+    }
+
+    /**
+     * Steering Wheel held at full lock with the lever at 0: the walker turns in place (D5). Positive wheel angle =
+     * positive steer = turning left (yaw increases), as in the studio.
+     */
+    @GameTest(template = "track", timeoutTicks = 240)
+    public static void steeringWheelTurnsTheWalker(GameTestHelper helper) {
+        Walker w = driven(helper, 32, 0);
+        var level = helper.getLevel();
+        BlockPos wheel = w.be().getBlockPos().offset(-1, 0, 0);
+        level.setBlockAndUpdate(wheel, BuiltInRegistries.BLOCK.get(ResourceLocation.parse("simulated:steering_wheel")).defaultBlockState());
+        final double[] yaw0 = new double[1];
+        helper.runAfterDelay(10, () -> yaw0[0] = w.yawWorld());
+        for (int t = 5; t <= 180; t++)
+            helper.runAfterDelay(t, () -> {
+                if (level.getBlockEntity(wheel) instanceof SteeringWheelBlockEntity sw) {
+                    // what a player's input does: the wheel keeps turning toward targetAngleToUpdate (else back to 0)
+                    sw.targetAngleToUpdate = sw.angleInput.getValue();
+                }
+            });
+        helper.runAfterDelay(180, () -> {
+            double turned = Math.toDegrees(angleDiff(w.yawWorld(), yaw0[0]));
+            double drift = Math.hypot(w.origin().x - w.start().x, w.origin().z - w.start().z);
+            Walkers.LOG.info("[walk] steering wheel: steer {}, turned {}°, drift {} b", w.be().lastSteer(), turned, drift);
+            if (Math.abs(w.be().lastSteer()) < 0.5) helper.fail("Steering Wheel at full lock gave steer %.2f".formatted(w.be().lastSteer()));
+            else if (Math.abs(turned) < 30) helper.fail("Walker turned only %.1f° with the wheel at full lock".formatted(turned));
+            else if (Math.signum(turned) != Math.signum(w.be().lastSteer())) helper.fail("Steer %.2f turned the walker %.1f°: wrong way round".formatted(w.be().lastSteer(), turned));
+            else if (drift > 1.5) helper.fail("Walker drifted %.2f b while turning in place".formatted(drift));
+            else helper.succeed();
+        });
     }
 }
