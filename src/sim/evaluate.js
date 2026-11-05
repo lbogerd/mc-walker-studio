@@ -68,6 +68,8 @@ export const METRICS = [
     help: 'Peak righting torque ÷ the stabilizer\'s maxTorque. Above 100% the walker tips. — = no stabilizer fitted.' },
   { group: 'Stability', key: 'stance', label: 'Min feet planted', unit: '', fmt: 0, get: (s, r) => r.summary.stanceMin, target: 'stanceMin', op: '>=',
     help: 'Fewest feet on the ground at any tick.' },
+  { group: 'Mechanics', key: 'hullAccel', label: 'Peak hull acceleration', unit: 'b/s²', fmt: 1, get: (s, r) => r.summary.hullAccelMax, target: 'hullAccelMax', op: '<=',
+    help: 'Peak horizontal acceleration a hull on this walker\'s suspension needs to follow the plan (path + sway). Planted feet can only push so hard sideways (friction). Calibrated in the mod\'s walking game tests: a plan needing 12 b/s² was tracked within 0.16 b, one needing 30 b/s² could not; the 20 b/s² target is provisional.' },
   { group: 'Mechanics', key: 'reach', label: 'Max reach used', unit: '%', fmt: 0, scale: 100, get: (s, r) => r.summary.reachMax, target: 'reachMax', op: '<=',
     help: 'Hip→foot distance ÷ total leg length at the worst tick. >100% means the leg cannot reach its target.' },
   { group: 'Mechanics', key: 'footErr', label: 'Max foot slip', unit: 'b', fmt: 2, get: (s, r) => r.summary.footErrMax, target: 'footErrorMax', op: '<=',

@@ -70,7 +70,7 @@ public final class Simulate {
 
     public static final class Summary {
         public double speed, topSpeed, distance, netForward, netDisplacement, yawTotalDeg, yawRateMaxDegS, maxYawRateDegS,
-                endSpeed, endYawRateDegS, endPlanted, marginMin, stanceMin, reachMax, footErrMax, clearanceMin, bob, vyMax,
+                endSpeed, endYawRateDegS, endPlanted, marginMin, stanceMin, reachMax, footErrMax, clearanceMin, bob, vyMax, hullAccelMax,
                 pitchMaxDeg, jointSpeedMaxDegS, torqueMax, stabStress, trackErrMax, tiltErrMaxDeg, collisions,
                 refUsPerTick, footholdProbesPerTick;
         /** null without a stabilizer. */
@@ -84,7 +84,7 @@ public final class Simulate {
             m.put("netDisplacement", netDisplacement); m.put("yawTotalDeg", yawTotalDeg); m.put("yawRateMaxDegS", yawRateMaxDegS);
             m.put("maxYawRateDegS", maxYawRateDegS); m.put("endSpeed", endSpeed); m.put("endYawRateDegS", endYawRateDegS);
             m.put("endPlanted", endPlanted); m.put("marginMin", marginMin); m.put("stanceMin", stanceMin); m.put("reachMax", reachMax);
-            m.put("footErrMax", footErrMax); m.put("clearanceMin", clearanceMin); m.put("bob", bob); m.put("vyMax", vyMax);
+            m.put("footErrMax", footErrMax); m.put("clearanceMin", clearanceMin); m.put("bob", bob); m.put("vyMax", vyMax); m.put("hullAccelMax", hullAccelMax);
             m.put("pitchMaxDeg", pitchMaxDeg); m.put("jointSpeedMaxDegS", jointSpeedMaxDegS); m.put("torqueMax", torqueMax);
             m.put("stabLoad", stabLoad); m.put("stabStress", stabStress); m.put("trackErrMax", trackErrMax);
             m.put("tiltErrMaxDeg", tiltErrMaxDeg); m.put("collisions", collisions); m.put("refUsPerTick", refUsPerTick);
@@ -136,7 +136,7 @@ public final class Simulate {
 
         double[] prevAngles = null;
         double jointSpeedMax = 0, reachMax = 0, footErrMax = 0, marginMin = Double.POSITIVE_INFINITY, stanceMin = Double.POSITIVE_INFINITY;
-        double clearanceMin = Double.POSITIVE_INFINITY, pitchMax = 0, vyMax = 0, torqueMax = 0, trackErrMax = 0, tiltErrMax = 0;
+        double clearanceMin = Double.POSITIVE_INFINITY, pitchMax = 0, vyMax = 0, torqueMax = 0, trackErrMax = 0, tiltErrMax = 0, hullAccelMax = 0;
         double pathLength = 0, yawRateMax = 0;
         long solveNanos = warmNanos;
         int solveTicks = warm;
@@ -236,6 +236,7 @@ public final class Simulate {
             clearanceMin = Math.min(clearanceMin, clearance);
             pitchMax = Math.max(pitchMax, Math.max(Math.abs(pose.pitch()), Math.abs(pose.roll())));
             vyMax = Math.max(vyMax, Math.abs(state.actualVy()) / TPS);
+            hullAccelMax = Math.max(hullAccelMax, state.hullAccel());
             torqueMax = Math.max(torqueMax, torque);
             trackErrMax = Math.max(trackErrMax, Math.abs(trackErr));
             tiltErrMax = Math.max(tiltErrMax, Math.max(Math.abs(pose.pitch() - planned.pitch()), Math.abs(pose.roll() - planned.roll())));
@@ -326,6 +327,7 @@ public final class Simulate {
         s.clearanceMin = clearanceMin;
         s.bob = bob;
         s.vyMax = vyMax * TPS;
+        s.hullAccelMax = hullAccelMax;
         s.pitchMaxDeg = deg(pitchMax);
         s.jointSpeedMaxDegS = deg(jointSpeedMax) * TPS;
         s.torqueMax = torqueMax;

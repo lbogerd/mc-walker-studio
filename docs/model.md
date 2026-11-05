@@ -55,6 +55,11 @@ followed exactly in x, z and yaw.
   run time), *max turn rate* (design) and *peak yaw rate* (achieved on the course).
 - **Joint speed**: measured relative to the hull. Hip yaw is the coxa direction (3-segment legs) or the
   leg plane's orientation (2-segment legs), so hull turning and pitching don't count as joint motion.
+- **Peak hull acceleration**: the planned horizontal hull path (path + sway) is run through the walker's own
+  suspension follower (the plan interpolated across sub-steps), and its peak acceleration is what planted feet
+  must push the real hull with. Feet can only push so hard sideways (friction). The mod's walking game tests
+  calibrate it: a plan needing 12 b/s² was tracked within 0.16 b, one needing 30 b/s² could not. The
+  `hullAccelMax` target of 20 b/s² is provisional. Diagnostic only; it doesn't change the simulated pose.
 - **Bob**: peak-to-peak hull height after removing a one-cycle moving average (the terrain trend).
 - **Events**: `overreach`, `overcompress`, `toe-stub`, `knee-clip`, `void-step`, `body-scrape`,
   `foot-clash` (neighbouring feet closer than 0.6 b), `step-too-high`. The ones that count as collisions:

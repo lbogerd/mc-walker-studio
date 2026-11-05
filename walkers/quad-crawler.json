@@ -11,7 +11,8 @@
       "Statically stable, so no Gyro Stabilizer (D6): it saves the strider's stabilizer stress."
     ],
     "openQuestions": [
-      "Is ~1.6 b/s too slow to feel good as a vehicle?"
+      "Is ~1.6 b/s too slow to feel good as a vehicle?",
+      "Peak hull acceleration is far above the 20 b/s\u00b2 target: the full sway (comShift 1) on a 9-block hull swings it faster than planted feet can push a real hull (see the mod's walking game tests). Less sway, a slower gait or a narrower stance?"
     ]
   },
   "body": {

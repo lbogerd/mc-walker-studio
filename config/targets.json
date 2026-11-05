@@ -5,6 +5,7 @@
   "stanceMin": 2,
   "reachMax": 0.95,
   "footErrorMax": 0.05,
+  "hullAccelMax": 20,
   "collisionsMax": 0,
   "bodyBobMax": 0.3,
   "bodyPitchMaxDeg": 20,

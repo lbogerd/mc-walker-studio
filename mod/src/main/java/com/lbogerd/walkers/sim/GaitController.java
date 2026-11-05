@@ -247,6 +247,8 @@ public final class GaitController {
             Pose actual,
             /** Vertical speed of the actual hull, b/s. */
             double actualVy,
+            /** Peak horizontal acceleration (b/s²) this tick of a hull on this suspension following the plan (path + sway). */
+            double hullAccel,
             List<LegOut> legs) {}
 
     // ---------------------------------------------------------------- state
@@ -271,6 +273,11 @@ public final class GaitController {
     private double actY, actVy, actP, actVp, actR, actVr;
     private final double comShift, horizon, kS;
     private final double[] comLocal;
+
+    // Horizontal demand (mirrors simulate.js): planned path + sway run through the suspension follower, with the
+    // plan interpolated across the sub-steps. Diagnostic only.
+    private boolean hfInit = false;
+    private double hfx, hfz, hfvx, hfvz, hpx, hpz;
 
     private int t; // next tick to run
     private TickState last;
@@ -461,6 +468,19 @@ public final class GaitController {
             r = follow(actR, actVr, roll); actR = r[0]; actVr = r[1];
         }
         Pose pose = new Pose(new double[] {P.x() + shiftX, actY, P.z() + shiftZ}, P.yaw(), actP, actR);
+        // the plan moves once per tick: interpolate it across the substeps so a steady walk isn't a staircase
+        double tx = P.x() + shiftX, tz = P.z() + shiftZ;
+        if (!hfInit) { hfx = tx; hfz = tz; hpx = tx; hpz = tz; hfInit = true; }
+        double hullAccel = 0;
+        for (int i = 1; i <= SUB; i++) {
+            double gx = hpx + ((tx - hpx) * i) / SUB, gz = hpz + ((tz - hpz) * i) / SUB;
+            double nvx = (hfvx + wn * wn * (gx - hfx) * hSub) / followDen;
+            double nvz = (hfvz + wn * wn * (gz - hfz) * hSub) / followDen;
+            hullAccel = Math.max(hullAccel, SimMath.hypot(nvx - hfvx, nvz - hfvz) / hSub);
+            hfvx = nvx; hfvz = nvz;
+            hfx += hfvx * hSub; hfz += hfvz * hSub;
+        }
+        hpx = tx; hpz = tz;
         Pose planned = new Pose(new double[] {P.x() + shiftX, bodyY, P.z() + shiftZ}, P.yaw(), pitch, roll);
 
         // 3. IK per leg (legs hang off the actual hull)
@@ -476,7 +496,7 @@ public final class GaitController {
                     bodyToWorld(pose, sol.knee()),
                     bodyToWorld(pose, sol.foot())));
         }
-        return new TickState(t, P, command, planned, pose, actVy, Collections.unmodifiableList(legOut));
+        return new TickState(t, P, command, planned, pose, actVy, hullAccel, Collections.unmodifiableList(legOut));
     }
 
     private double fit(List<Integer> grounded, List<LegState> legState, double gMean, int axis) {

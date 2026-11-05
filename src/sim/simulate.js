@@ -410,6 +410,10 @@ export function simulate(spec, terrain, opts = {}) {
   let prevAngles = null;
   let jointSpeedMax = 0, reachMax = 0, footErrMax = 0, marginMin = Infinity, stanceMin = Infinity;
   let clearanceMin = Infinity, pitchMax = 0, vyMax = 0, torqueMax = 0, trackErrMax = 0, tiltErrMax = 0;
+  // Horizontal demand: the planned hull position (path + sway) run through the walker's own suspension
+  // (same follower as height), whose acceleration is what planted feet must push the real hull with. Diagnostic
+  // only: it doesn't change the simulated pose.
+  let hfx = null, hfz = 0, hfvx = 0, hfvz = 0, hpx = 0, hpz = 0, hullAccelMax = 0;
   let pathLength = 0, yawRateMax = 0;
   let solveTime = 0, solveTicks = 0;
   const comLocal = add([0, spec.body.size[1] / 2, 0], spec.body.comOffset);
@@ -503,6 +507,18 @@ export function simulate(spec, terrain, opts = {}) {
       [act.r, act.vr] = follow(act.r, act.vr, roll);
     }
     const pose = { pos: [P.x + shiftX, act.y, P.z + shiftZ], yaw: P.yaw, pitch: act.p, roll: act.r };
+    // the plan moves once per tick: interpolate it across the substeps so a steady walk isn't a staircase
+    const tx = P.x + shiftX, tz = P.z + shiftZ;
+    if (hfx === null) { hfx = tx; hfz = tz; hpx = tx; hpz = tz; }
+    for (let i = 1; i <= SUB; i++) {
+      const gx = hpx + ((tx - hpx) * i) / SUB, gz = hpz + ((tz - hpz) * i) / SUB;
+      const nvx = (hfvx + wn * wn * (gx - hfx) * hSub) / followDen;
+      const nvz = (hfvz + wn * wn * (gz - hfz) * hSub) / followDen;
+      if (t >= 0) hullAccelMax = Math.max(hullAccelMax, Math.hypot(nvx - hfvx, nvz - hfvz) / hSub);
+      hfvx = nvx; hfvz = nvz;
+      hfx += hfvx * hSub; hfz += hfvz * hSub;
+    }
+    hpx = tx; hpz = tz;
 
     // 3. IK per leg (legs hang off the actual hull)
     const legOut = legState.map((st, li) => {
@@ -676,6 +692,7 @@ export function simulate(spec, terrain, opts = {}) {
       clearanceMin,
       bob,
       vyMax: vyMax * TPS,
+      hullAccelMax, // b/s², peak horizontal acceleration of a hull on this suspension following the plan (path + sway)
       pitchMaxDeg: deg(pitchMax),
       jointSpeedMaxDegS: deg(jointSpeedMax) * TPS,
       torqueMax,
