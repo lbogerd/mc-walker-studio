@@ -33,9 +33,11 @@ public final class PathPlanner {
     /** Hull pose on the ground plane. */
     public record Pose2(double x, double z, double yaw) {}
 
-    private final double T, duty, vTop, wTop, settle, restPhase;
-    private double aLin, aYaw;
-    private final double aLin0, aYaw0;
+    private final double duty, settle, restPhase, aLin, aYaw;
+    private final double T0, vTop0, wTop0;
+    // effective cycle, top speed and turn rate: the design values, or scaled by setTimeScale (live use)
+    private double T, vTop, wTop;
+    private boolean frozen;
     private final int restN;
     private final double[][] feet;
     private final double[] legPhase;
@@ -47,13 +49,13 @@ public final class PathPlanner {
     private double[] X, Z, YAW, PH, V, W, ACT, TV, TW; // TV/TW: saturated command target given at each tick
 
     PathPlanner(WalkerSpec spec, List<GaitController.SimLeg> legs, Scenarios.Command initial, int tA, double x0) {
-        T = spec.gait.cycleTicks;
+        T = T0 = spec.gait.cycleTicks;
         duty = spec.gait.duty;
-        vTop = spec.gait.stride / T;
+        vTop = vTop0 = spec.gait.stride / T;
         double R = spec.turnRadius;
-        wTop = vTop / R;
-        aLin = aLin0 = spec.gait.accel / (TPS * TPS);
-        aYaw = aYaw0 = aLin / R;
+        wTop = wTop0 = vTop / R;
+        aLin = spec.gait.accel / (TPS * TPS);
+        aYaw = aLin / R;
         settle = spec.gait.settleRate;
         restPhase = spec.gait.restPhase;
         restN = spec.gait.restPlanted; // feet planted in the rest stance
@@ -134,14 +136,15 @@ public final class PathPlanner {
         double tv = tvw[0], tw = tvw[1];
         TV[i] = tv;
         TW[i] = tw;
-        double[] vw = saturate(towards(V[i], tv, aLin), towards(W[i], tw, aYaw));
+        double[] vw = frozen ? new double[] {0, 0} : saturate(towards(V[i], tv, aLin), towards(W[i], tw, aYaw));
         double v = vw[0], w = vw[1];
         double[] h = heading(YAW[i] + w / 2);
         YAW[i + 1] = YAW[i] + w;
         X[i + 1] = X[i] + v * h[0];
         Z[i + 1] = Z[i] + v * h[2];
         double dP;
-        if (v == 0 && w == 0 && tv == 0 && tw == 0) {
+        if (frozen) dP = 0; // legs locked by the shaft (live only)
+        else if (v == 0 && w == 0 && tv == 0 && tw == 0) {
             // stopped: run on to the rest stance (never past the middle of the rest window), then freeze
             if (planted(PH[i]) >= restN) dP = 0;
             else {
@@ -168,12 +171,18 @@ public final class PathPlanner {
     }
 
     /**
-     * Live use only (no JS counterpart): scale the acceleration limits. When the gait clock runs {@code s} design
-     * ticks per real tick (shaft RPM, D7), pass 1/s² so the hull's acceleration in real time stays gait.accel.
+     * Live use only (no JS counterpart): the shaft drives the legs (D7). Scale {@code s} = |RPM| ÷ design RPM shortens
+     * the cycle to cycleTicks/s and raises the top speed and turn rate × s; the stride stays the same. The planner still
+     * runs in real ticks, so acceleration stays gait.accel at any RPM, and a higher RPM only raises the speed limit.
+     * A lower RPM lowers it at once: the legs can't outrun the shaft, so the hull slows as fast as the shaft does.
+     * {@code s} = 0 (no rotation) locks the legs: the gait clock stops and so does the hull.
      */
-    public void setAccelScale(double f) {
-        aLin = aLin0 * f;
-        aYaw = aYaw0 * f;
+    public void setTimeScale(double s) {
+        frozen = !(s > 0);
+        if (frozen) return;
+        T = T0 / s;
+        vTop = vTop0 * s;
+        wTop = wTop0 * s;
     }
 
     /** Number of ticks currently held. */
@@ -241,7 +250,7 @@ public final class PathPlanner {
     public Pose2 predict(double tk, double goalPhase) {
         int j = (int) Math.max(0, Math.min(n - 1, tk - tA));
         double x = X[j], z = Z[j], yaw = YAW[j], ph = PH[j], vv = V[j], ww = W[j];
-        if (goalPhase <= ph) return new Pose2(x, z, yaw);
+        if (goalPhase <= ph || frozen) return new Pose2(x, z, yaw);
         if (tA + j >= 0 && j == n - 1) throw new IllegalStateException("command for tick " + (tA + j) + " not given yet");
         double tv = TV[j], tw = TW[j];
         for (int it = 0; it < 20000; it++) {

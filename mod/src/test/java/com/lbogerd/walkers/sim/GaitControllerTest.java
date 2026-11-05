@@ -103,4 +103,45 @@ class GaitControllerTest {
             assertTrue(full.path().heldTicks() > 6000, "untrimmed control keeps everything");
         }
     }
+
+    /** A re-base moves the course origin, not the walker: every position shifts by exactly −dy, in one frame. */
+    @Test
+    void rebaseKeepsEverythingInOneFrame() throws Exception {
+        for (String id : new String[] {"quad-strider", "hexapod"}) {
+            WalkerSpec spec = walker(id);
+            GaitController g = new GaitController(spec, Scenarios.makeTerrain("flat"), Scenarios.Command.STOP, 0);
+            GaitController.TickState a = null;
+            for (int t = 0; t < 120; t++) a = g.tick(Scenarios.Command.STOP); // settled, standing
+            int dy = -5;
+            g.rebaseY(dy);
+            assertTrue(g.last() == null, "the stale result is cleared");
+            GaitController.TickState b = g.tick(Scenarios.Command.STOP);
+            double[] up = {0, -dy, 0};
+            assertArrayEquals(SimMath.add(a.planned().pos(), up), b.planned().pos(), 1e-9, id + " planned hull");
+            assertArrayEquals(SimMath.add(a.actual().pos(), up), b.actual().pos(), 1e-9, id + " actual hull");
+            for (int li = 0; li < a.legs().size(); li++) {
+                GaitController.LegOut la = a.legs().get(li), lb = b.legs().get(li);
+                assertArrayEquals(SimMath.add(la.hip(), up), lb.hip(), 1e-9, id + " hip " + li);
+                assertArrayEquals(SimMath.add(la.knee(), up), lb.knee(), 1e-9, id + " knee " + li);
+                assertArrayEquals(SimMath.add(la.foot(), up), lb.foot(), 1e-9, id + " foot " + li);
+                assertArrayEquals(SimMath.add(la.st().target(), up), lb.st().target(), 1e-9, id + " target " + li);
+                if (lb.st().fh() != null) assertEquals(la.foot()[1] - dy, lb.st().fh().y, 1e-9, id + " foothold " + li);
+            }
+        }
+    }
+
+    /** Time scale (D7): s× the RPM runs the gait clock s× as fast and walks s× the speed with the same stride. */
+    @Test
+    void timeScaleScalesClockAndSpeed() throws Exception {
+        WalkerSpec spec = walker("quad-strider");
+        for (double s : new double[] {0.5, 2}) {
+            GaitController g = new GaitController(spec, Scenarios.makeTerrain("flat"), Scenarios.Command.STOP, 0);
+            g.setTimeScale(s);
+            GaitController.TickState first = null, st = null;
+            for (int t = 0; t < 600; t++) { st = g.tick(new Scenarios.Command(1, 0)); if (t == 300) first = st; }
+            double rate = (st.path().phase() - first.path().phase()) / 299, speed = (st.path().x() - first.path().x()) / 299;
+            assertEquals(s / spec.gait.cycleTicks, rate, 1e-9, "gait clock at scale " + s);
+            assertEquals(s * spec.gait.stride / spec.gait.cycleTicks, speed, 1e-9, "speed at scale " + s);
+        }
+    }
 }

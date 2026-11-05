@@ -221,13 +221,14 @@ public final class WalkingGameTests {
     static void expectWalk(GameTestHelper helper, int rpm, int lever, double minWalked, double maxWalked, double maxPosErr) {
         Walker w = driven(helper, rpm, lever);
         trace(helper, w, "drive " + rpm + "rpm lever " + lever, 200);
-        final int[] g0 = new int[1];
-        helper.runAfterDelay(40, () -> g0[0] = w.drive().gaitTicks());
+        final double[] ph0 = new double[1];
+        helper.runAfterDelay(40, () -> ph0[0] = w.drive().gaitPhase());
         helper.runAfterDelay(200, () -> {
-            // D7: the shaft drives the gait clock: |RPM| / design RPM gait ticks per server tick
-            double rate = (w.drive().gaitTicks() - g0[0]) / 160.0, expectRate = Math.abs(rpm) / 32.0;
-            if (Math.abs(rate - expectRate) > 0.05 * expectRate + 0.01) {
-                helper.fail("Gait ran %.3f ticks per tick at %d RPM; expected %.3f".formatted(rate, rpm, expectRate));
+            // D7: the shaft drives the gait clock: at full lever it runs |RPM| / design RPM cycles per design cycle
+            double rate = (w.drive().gaitPhase() - ph0[0]) / 160.0;
+            double expectRate = lever == 0 ? 0 : Math.abs(rpm) / 32.0 / w.drive().spec.gait.cycleTicks;
+            if (Math.abs(rate - expectRate) > 0.05 * expectRate + 1e-4) {
+                helper.fail("Gait clock ran %.5f cycles/tick at %d RPM; expected %.5f".formatted(rate, rpm, expectRate));
                 return;
             }
             Vector3d o = w.origin(), plan = w.drive().plannedOriginWorld();
@@ -249,14 +250,9 @@ public final class WalkingGameTests {
     @GameTest(template = "track", timeoutTicks = 260)
     public static void halfRpmWalksAtHalfSpeed(GameTestHelper helper) { expectWalk(helper, 16, 15, 3.5, 5.5); }
 
-    /**
-     * Twice the design RPM: the gait cycle halves and the walker goes twice as fast (D7: RPM drives the legs). This
-     * checks the RPM → gait clock and speed mapping. Tracking is looser here on purpose: at 64 RPM this crawler's sway
-     * lags and its static margin goes negative (studio: +0.02 at 32 RPM, −0.11 at 64), so the real hull wobbles about
-     * ±0.5–0.8 b. Tracking quality is checked at the design RPM.
-     */
+    /** Twice the design RPM: the gait cycle halves and the walker goes twice as fast (D7: RPM drives the legs). */
     @GameTest(template = "track", timeoutTicks = 260)
-    public static void doubleRpmWalksAtDoubleSpeed(GameTestHelper helper) { expectWalk(helper, 64, 15, 16, 22, 1.0); }
+    public static void doubleRpmWalksAtDoubleSpeed(GameTestHelper helper) { expectWalk(helper, 64, 15, 16, 22); }
 
     /** Lever at 0: the walker stands still even though the shaft turns. */
     @GameTest(template = "track", timeoutTicks = 260)
@@ -411,29 +407,31 @@ public final class WalkingGameTests {
     // ------------------------------------------------------------------ review round 2
 
     /**
-     * D4 at any RPM: running the gait at 2× (shaft at twice the design RPM) must not raise the hull's real
-     * acceleration above gait.accel (2 b/s²), from a standstill or when the RPM doubles mid-walk.
+     * D4 at any RPM: the hull's real acceleration never exceeds gait.accel (2 b/s²) while the shaft speed and the
+     * throttle change, including together: start at 0.5× with throttle at the same tick, raise to 1.5×, reverse at 2×,
+     * brake, restart. (Lowering the RPM is the one exception: the legs can't outrun the shaft, so the hull slows with it.)
      */
     @GameTest(template = "track", timeoutTicks = 260)
-    public static void accelerationStaysLimitedAtHighRpm(GameTestHelper helper) {
+    public static void accelerationStaysLimitedAtAnyRpm(GameTestHelper helper) {
         Walker w = build(helper);
         final double[] prev = {Double.NaN}, peak = {0}, top = {0};
         for (int t = 0; t <= 220; t++) {
             int tick = t;
             helper.runAfterDelay(t, () -> {
-                // start at 2× from a standstill, drop to 1× at tick 100, back to 2× at tick 140
-                w.be().setManualCommand(tick < 10 ? Scenarios.Command.STOP : new Scenarios.Command(1, 0));
-                w.be().setManualTimeScale(tick >= 100 && tick < 140 ? 1 : 2);
+                double scale = tick < 60 ? 0.5 : tick < 100 ? 1.5 : 2;
+                double throttle = tick < 10 ? 0 : tick < 100 ? 1 : tick < 140 ? -1 : tick < 180 ? 0 : 1;
+                w.be().setManualCommand(new Scenarios.Command(throttle, 0));
+                w.be().setManualTimeScale(tick < 10 ? 1 : scale); // scale and throttle change on the same tick (10)
                 double v = w.drive().plannedSpeed();
                 if (!Double.isNaN(prev[0])) peak[0] = Math.max(peak[0], Math.abs(v - prev[0]) * 20);
                 prev[0] = v;
-                top[0] = Math.max(top[0], v);
+                top[0] = Math.max(top[0], Math.abs(v));
             });
         }
         helper.runAfterDelay(220, () -> {
             double limit = w.drive().spec.gait.accel;
-            Walkers.LOG.info("[walk] 2x RPM: peak planned acceleration {} b/s² (limit {}), top speed {} b/s", peak[0], limit, top[0]);
-            if (peak[0] > limit * 1.1) helper.fail("Planned acceleration reached %.2f b/s² at 2× RPM (gait.accel %.1f)".formatted(peak[0], limit));
+            Walkers.LOG.info("[walk] RPM and throttle changes: peak planned acceleration {} b/s² (limit {}), top speed {} b/s", peak[0], limit, top[0]);
+            if (peak[0] > limit * 1.02) helper.fail("Planned acceleration reached %.3f b/s² (gait.accel %.1f)".formatted(peak[0], limit));
             else if (top[0] < 1.8 * w.drive().gaitTopSpeed()) helper.fail("2× RPM only reached %.2f b/s".formatted(top[0]));
             else helper.succeed();
         });

@@ -271,7 +271,8 @@ public final class GaitController {
     private static final int SUB = 8;
     private boolean actInit = false;
     private double actY, actVy, actP, actVp, actR, actVr;
-    private final double comShift, horizon, kS;
+    private final double comShift, kS;
+    private double horizon;
     private final double[] comLocal;
 
     // Horizontal demand (mirrors simulate.js): planned path + sway run through the suspension follower, with the
@@ -334,16 +335,24 @@ public final class GaitController {
         }
     }
 
+    /** Live use only (no JS counterpart): shaft-driven gait speed (D7); see {@link PathPlanner#setTimeScale}. */
+    public void setTimeScale(double s) {
+        path.setTimeScale(s);
+        if (s > 0) horizon = (1 - duty) * (T / s) + 2;
+    }
+
     /**
      * Live use only (no JS counterpart): move the course frame's y origin up by {@code dy} blocks, shifting every
      * stored height down by the same amount, so a walker that climbs or descends far keeps its heights near 0 and
-     * never hits {@link Terrain#VOID}. The caller moves its world mapping up by dy at the same time.
+     * never hits {@link Terrain#VOID}. The caller moves its world mapping up by dy at the same time. Call it between
+     * ticks: {@link #last()} is cleared, and the next {@link #tick} returns a result entirely in the new frame.
      */
     public void rebaseY(int dy) {
         if (dy == 0) return;
         for (Map<Integer, Foothold> m : fhCache) for (Foothold f : m.values()) if (!f.isVoid) f.y -= dy;
         if (bodyY != null) bodyY -= dy;
         actY -= dy;
+        last = null; // the previous tick's result is in the old frame; the next tick() produces a consistent one
     }
 
     /** Footholds held per leg (for tests of {@link #trimHistory}). */

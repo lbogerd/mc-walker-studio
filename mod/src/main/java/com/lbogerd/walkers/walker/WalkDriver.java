@@ -30,15 +30,15 @@ import java.util.List;
  * leg also only counts if its foothold is within the leg's reach of the <i>actual</i> hip and its ground block still
  * exists. So the hull is only supported where feet really are, and an unstable gait needs the Gyro Stabilizer (D6).
  * <p>
- * <b>Time scale (D7).</b> The shaft drives the legs, so the gait clock runs at |RPM| ÷ the spec's design RPM: each
- * server tick advances the walking loop that many (fractional, accumulated) design ticks. Twice the RPM halves the
- * gait cycle and doubles the top speed; no rotation freezes the legs where they are. Physics targets interpolate
- * between the last two gait ticks. The planner's acceleration limits are scaled by 1/scale², and changes of scale are
- * rate-limited, so the hull's real acceleration stays at gait.accel whatever the RPM (D4).
+ * <b>Time scale (D7).</b> The shaft drives the legs: with scale s = |RPM| ÷ the spec's design RPM, the gait cycle is
+ * cycleTicks/s and the top speed and turn rate × s ({@link GaitController#setTimeScale}). The walking loop still runs
+ * one tick per server tick, so the hull's acceleration stays gait.accel at any RPM (D4); a higher RPM only raises the
+ * speed limit. A lower RPM lowers it at once (the legs can't outrun the shaft), and no rotation locks the legs.
  * <p>
  * <b>Elevation.</b> The walking loop works in course y relative to an origin; whenever the plan drifts more than
- * {@link #REBASE_AT} blocks from ride height, the origin moves with it ({@link GaitController#rebaseY}), so long
- * climbs and descents never reach {@link com.lbogerd.walkers.sim.Terrain#VOID}.
+ * {@link #REBASE_AT} blocks from ride height, the origin moves with it ({@link GaitController#rebaseY}) before the
+ * next tick, so long climbs and descents never reach {@link com.lbogerd.walkers.sim.Terrain#VOID} and every tick's
+ * result is in a single frame.
  */
 public final class WalkDriver {
     /** Friction-cone limit on a planted foot's horizontal force, as a fraction of its vertical force. */
@@ -54,7 +54,7 @@ public final class WalkDriver {
     private GaitController.TickState last, previous;
     private final ForceTotal forces = new ForceTotal();
     private int lastPlanted;
-    private double timeScale = 1, targetScale = 1, clock = 0; // design ticks per server tick; accumulated fraction
+    private double timeScale = 1;
     /** Planned hull poses of the last two gait ticks (kept separately so a rebase can shift them). */
     private SimMath.Pose lastPlan, prevPlan;
     static final int REBASE_AT = 4;
@@ -62,7 +62,7 @@ public final class WalkDriver {
     /** How often the course origin was moved vertically (tests). */
     public int rebases() { return rebases; }
     private int gaitTicks = 0;
-    /** Most design ticks run per server tick (8× the design RPM). */
+    /** Highest time scale (8× the design RPM). */
     public static final double MAX_TIME_SCALE = 8;
     static final int TRIM_EVERY = 200, KEEP_TICKS = 400;
     /** A stance foot counts as touching if the leg's IK, solved from the actual hull, gets within this of it [b]. */
@@ -78,10 +78,12 @@ public final class WalkDriver {
 
     public void setCommand(Scenarios.Command command) { this.command = command; }
     /** Gait time scale = |shaft RPM| ÷ design RPM (D7); 1 runs the walking loop at its design speed. */
-    public void setTimeScale(double scale) { this.targetScale = Math.max(0, Math.min(MAX_TIME_SCALE, scale)); }
+    public void setTimeScale(double scale) { this.timeScale = Math.max(0, Math.min(MAX_TIME_SCALE, scale)); }
     public double timeScale() { return timeScale; }
-    /** Walking-loop ticks run so far (design ticks). */
+    /** Walking-loop ticks run so far (one per server tick). */
     public int gaitTicks() { return gaitTicks; }
+    /** The gait clock (cycles since the start). */
+    public double gaitPhase() { return last == null ? 0 : last.path().phase(); }
     public Scenarios.Command command() { return command; }
     public GaitController.TickState last() { return last; }
     public boolean started() { return gait != null; }
@@ -100,9 +102,9 @@ public final class WalkDriver {
     /** The spec's top speed at design RPM [b/s]. */
     public double gaitTopSpeed() { return spec.gait.stride / spec.gait.cycleTicks * 20; }
 
-    /** Planned ground speed in real time [b/s]: the planner's speed × the time scale. */
+    /** Planned signed ground speed [b/s] (the planner runs in real ticks). */
     public double plannedSpeed() {
-        return last == null ? 0 : Math.abs(last.path().v()) * 20 * timeScale;
+        return last == null ? 0 : last.path().v() * 20;
     }
 
     /**
@@ -113,25 +115,18 @@ public final class WalkDriver {
         if (gait == null) start(subLevel, level);
         terrain.setReference(subLevel.logicalPose().transformPosition(new Vector3d(frame.originPlot)).y);
         terrain.clear();
-        // RPM changes are rate-limited so the real speed can't jump: d(scale)/dt ≤ accel / top speed
-        double vTopWorld = Math.max(0.1, gait.path().vTop() * 20);
-        double maxStep = spec.gait.accel / vTopWorld / 20;
-        timeScale += Math.max(-maxStep, Math.min(maxStep, targetScale - timeScale));
-        if (timeScale > 1e-6) gait.path().setAccelScale(Math.min(1e4, 1 / (timeScale * timeScale)));
-        clock += timeScale;
-        while (clock >= 1) {
-            clock -= 1;
-            previous = last;
-            last = gait.tick(command);
-            prevPlan = lastPlan == null ? last.planned() : lastPlan;
-            lastPlan = last.planned();
-            if (++gaitTicks % TRIM_EVERY == 0) gait.trimHistory(KEEP_TICKS);
-            rebaseIfNeeded();
-        }
+        rebaseIfNeeded(); // between ticks, so the tick below is entirely in the new frame
+        gait.setTimeScale(timeScale);
+        previous = last;
+        last = gait.tick(command);
+        prevPlan = lastPlan == null ? last.planned() : lastPlan;
+        lastPlan = last.planned();
+        if (++gaitTicks % TRIM_EVERY == 0) gait.trimHistory(KEEP_TICKS);
     }
 
     /** Keep course heights near 0: move the course origin with the plan when it climbs or descends far. */
     private void rebaseIfNeeded() {
+        if (lastPlan == null) return;
         double off = lastPlan.pos()[1] - spec.body.rideHeight;
         if (Math.abs(off) <= REBASE_AT) return;
         int dy = (int) Math.round(off);
@@ -194,9 +189,7 @@ public final class WalkDriver {
         if (planted == 0) return;
         double weightShare = mass.getMass() * gravity / planted;
 
-        // targets between the last two gait ticks (the clock is `clock` of the way to the next one)
         SimMath.Pose plan = lastPlan, prevPlan = this.prevPlan;
-        double a = clock;
         for (int i = 0; i < legs.size(); i++) {
             if (!support[i]) continue;
             double[] mount = gait.legs.get(i).mount;
@@ -204,8 +197,8 @@ public final class WalkDriver {
             Vector3d hipWorld = pose.transformPosition(new Vector3d(hipPlot));
             Vector3d tNow = frame.courseToWorld(SimMath.bodyToWorld(plan, mount));
             Vector3d tPrev = frame.courseToWorld(SimMath.bodyToWorld(prevPlan, mount));
-            Vector3d target = new Vector3d(tPrev).lerp(tNow, a);
-            Vector3d targetVel = new Vector3d(tNow).sub(tPrev).mul(20 * timeScale); // planned hip velocity [b/s]
+            Vector3d target = tNow;
+            Vector3d targetVel = new Vector3d(tNow).sub(tPrev).mul(20); // planned hip velocity [b/s]
             // NB: the 2-arg getVelocity overload writes into its argument; always pass a separate dest.
             Vector3d vWorld = Sable.HELPER.getVelocity(level, new Vector3d(hipPlot), new Vector3d());
 
