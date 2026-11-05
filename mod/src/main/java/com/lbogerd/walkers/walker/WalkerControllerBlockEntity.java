@@ -50,6 +50,9 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
     public static int debugTicks = 0; // >0: log that many physics ticks (tests/debugging)
     private double lastMaxCompression;
 
+    /** Walk mode (D1 + D4): the walking loop drives the legs. Null = plain suspension with fixed hips. */
+    private WalkDriver walk;
+
     public WalkerControllerBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlocks.WALKER_CONTROLLER_BE.get(), pos, state);
     }
@@ -62,6 +65,28 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
         setChanged();
     }
 
+    /**
+     * Switch to walk mode: the walking loop ({@code sim}, ported from the studio) plans footholds and the hull pose
+     * from {@code specJson} (a walkers/*.json spec); planted legs push the hull toward that plan.
+     *
+     * @param originPlot plot position of the spec origin (hull bottom-face centre)
+     * @param forward    the hull's forward (spec +x), normally this controller's facing
+     */
+    public void configureWalker(String specJson, Vector3d originPlot, net.minecraft.core.Direction forward, Suspension suspension) {
+        this.walk = new WalkDriver(specJson, new WalkFrame(originPlot, forward), suspension);
+        this.suspension = suspension;
+        this.hipOffsets.clear();
+        this.anchors.clear();
+        setChanged();
+    }
+
+    public WalkDriver walk() { return walk; }
+
+    @Override
+    public void sable$tick(ServerSubLevel subLevel) {
+        if (walk != null && level != null) walk.tick(subLevel, level);
+    }
+
     public Suspension suspension() { return suspension; }
     public List<Vector3d> hipOffsets() { return List.copyOf(hipOffsets); }
     public int lastContacts() { return lastContacts; }
@@ -69,6 +94,10 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
 
     @Override
     public void sable$physicsTick(ServerSubLevel subLevel, RigidBodyHandle handle, double timeStep) {
+        if (walk != null) {
+            if (level != null) walk.physicsTick(subLevel, handle, timeStep, level);
+            return;
+        }
         if (hipOffsets.isEmpty() || level == null) return;
         MassData mass = subLevel.getMassTracker();
         if (mass.getMass() <= 0) return;
@@ -173,6 +202,16 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
             hips.add(t);
         }
         tag.put("Hips", hips);
+        if (walk != null) {
+            // The gait itself isn't saved: after a reload it restarts, standing, from wherever the hull is.
+            CompoundTag w = new CompoundTag();
+            w.putString("Spec", walk.specJson);
+            w.putDouble("OX", walk.frame.originPlot.x);
+            w.putDouble("OY", walk.frame.originPlot.y);
+            w.putDouble("OZ", walk.frame.originPlot.z);
+            w.putString("Forward", walk.frame.forward.getSerializedName());
+            tag.put("Walk", w);
+        }
     }
 
     @Override
@@ -187,6 +226,17 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
         for (Tag t : tag.getList("Hips", Tag.TAG_COMPOUND)) {
             CompoundTag c = (CompoundTag) t;
             hipOffsets.add(new Vector3d(c.getDouble("X"), c.getDouble("Y"), c.getDouble("Z")));
+        }
+        walk = null;
+        if (tag.contains("Walk", Tag.TAG_COMPOUND)) {
+            CompoundTag w = tag.getCompound("Walk");
+            var fwd = net.minecraft.core.Direction.byName(w.getString("Forward"));
+            try {
+                walk = new WalkDriver(w.getString("Spec"), new WalkFrame(new Vector3d(w.getDouble("OX"), w.getDouble("OY"), w.getDouble("OZ")),
+                        fwd == null ? net.minecraft.core.Direction.NORTH : fwd), suspension);
+            } catch (IllegalArgumentException e) {
+                com.lbogerd.walkers.Walkers.LOG.warn("Walker Controller at {}: dropping invalid walker spec: {}", getBlockPos(), e.getMessage());
+            }
         }
     }
 }
