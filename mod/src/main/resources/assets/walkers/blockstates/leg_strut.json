@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "axis=y": { "model": "walkers:block/leg_strut" },
+    "axis=z": { "model": "walkers:block/leg_strut_horizontal", "x": 90 },
+    "axis=x": { "model": "walkers:block/leg_strut_horizontal", "x": 90, "y": 90 }
+  }
+}

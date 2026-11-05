@@ -1,1 +1,8 @@
-{ "itemGroup.walkers": "Walkers" }
+{
+  "itemGroup.walkers": "Walkers",
+  "block.walkers.walker_controller": "Walker Controller",
+  "block.walkers.leg_actuator": "Leg Actuator",
+  "block.walkers.leg_strut": "Leg Strut",
+  "block.walkers.leg_joint": "Leg Joint",
+  "block.walkers.foot_pad": "Foot Pad"
+}

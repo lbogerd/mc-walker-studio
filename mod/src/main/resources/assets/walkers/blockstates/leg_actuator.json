@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "facing=up": { "model": "walkers:block/leg_actuator" },
+    "facing=down": { "model": "walkers:block/leg_actuator", "x": 180 },
+    "facing=north": { "model": "walkers:block/leg_actuator", "x": 90 },
+    "facing=east": { "model": "walkers:block/leg_actuator", "x": 90, "y": 90 },
+    "facing=south": { "model": "walkers:block/leg_actuator", "x": 90, "y": 180 },
+    "facing=west": { "model": "walkers:block/leg_actuator", "x": 90, "y": 270 }
+  }
+}

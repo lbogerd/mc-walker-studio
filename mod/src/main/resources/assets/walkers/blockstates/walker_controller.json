@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "walkers:block/walker_controller" },
+    "facing=east": { "model": "walkers:block/walker_controller", "y": 90 },
+    "facing=south": { "model": "walkers:block/walker_controller", "y": 180 },
+    "facing=west": { "model": "walkers:block/walker_controller", "y": 270 }
+  }
+}
