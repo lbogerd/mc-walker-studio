@@ -82,6 +82,9 @@ one; trots and bipeds do.
     per unit of torque. Stability metrics should report whether the stabilizer can hold the walker, not
     just warn.
   - Simulated has gyroscopic blocks to look at for patterns.
+- **Progress:** the Gyro Stabilizer block exists in the mod. It's a Create stress consumer whose torque cap
+  scales with RPM; game tests show a loaded two-legged hull tips without it or at 1 RPM, and stays upright
+  at 16 RPM. Its constants still need calibrating against the studio's units.
 
 ## D7: Shaft RPM sets top speed; the throttle scales from 0 up to it
 

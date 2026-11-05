@@ -126,10 +126,10 @@ public class WalkerControllerBlockEntity extends BlockEntity implements BlockEnt
                     -kLat * (hipWorld.x - anchor.x) - cLat * vWorld.x, 0,
                     -kLat * (hipWorld.z - anchor.z) - cLat * vWorld.z);
             Vector3d fLat = pose.transformNormalInverse(fLatWorld);
-            // Horizontal correction acts at centre-of-mass height (hip x/z): it still resists yaw, but doesn't
-            // pitch/roll the hull against the vertical springs the way a force at the hips would.
-            Vector3d latPoint = new Vector3d(hipLocal.x, mass.getCenterOfMass().y(), hipLocal.z);
-            forces.applyImpulseAtPoint(mass, latPoint, fLat.mul(timeStep, new Vector3d()));
+            // The horizontal foot force acts at the hip, where a real leg attaches. (Applying it at
+            // centre-of-mass height would hold the CoM over the feet and make any walker statically stable,
+            // which defeats the Gyro Stabilizer, decision D6.)
+            forces.applyImpulseAtPoint(mass, hipLocal, fLat.mul(timeStep, new Vector3d()));
             Vector3d force = new Vector3d(0, fUp, 0);
             forces.applyImpulseAtPoint(mass, hipLocal, force.mul(timeStep));
         }

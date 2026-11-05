@@ -3,6 +3,8 @@ package com.lbogerd.walkers.registry;
 import com.lbogerd.walkers.Walkers;
 import com.lbogerd.walkers.leg.LegActuatorBlock;
 import com.lbogerd.walkers.leg.LegJointBlock;
+import com.lbogerd.walkers.walker.GyroStabilizerBlock;
+import com.lbogerd.walkers.walker.GyroStabilizerBlockEntity;
 import com.lbogerd.walkers.walker.WalkerControllerBlock;
 import com.lbogerd.walkers.walker.WalkerControllerBlockEntity;
 import net.minecraft.core.registries.Registries;
@@ -45,6 +47,11 @@ public final class ModBlocks {
     public static final DeferredBlock<Block> FOOT_PAD = BLOCKS.register("foot_pad",
             () -> new Block(metal(MapColor.COLOR_GRAY)));
 
+    // Gyro Stabilizer (decision D6): a Create stress consumer that rights the hull.
+    public static final DeferredBlock<GyroStabilizerBlock> GYRO_STABILIZER = BLOCKS.register("gyro_stabilizer",
+            () -> new GyroStabilizerBlock(metal(MapColor.COLOR_LIGHT_BLUE).noOcclusion()));
+
+    public static final DeferredHolder<Item, BlockItem> GYRO_STABILIZER_ITEM = ITEMS.registerSimpleBlockItem(GYRO_STABILIZER);
     public static final DeferredHolder<Item, BlockItem> WALKER_CONTROLLER_ITEM = ITEMS.registerSimpleBlockItem(WALKER_CONTROLLER);
     public static final DeferredHolder<Item, BlockItem> LEG_ACTUATOR_ITEM = ITEMS.registerSimpleBlockItem(LEG_ACTUATOR);
     public static final DeferredHolder<Item, BlockItem> LEG_STRUT_ITEM = ITEMS.registerSimpleBlockItem(LEG_STRUT);
@@ -56,6 +63,11 @@ public final class ModBlocks {
             BLOCK_ENTITIES.register("walker_controller", () -> BlockEntityType.Builder
                     .of(WalkerControllerBlockEntity::new, WALKER_CONTROLLER.get()).build(null));
 
+    @SuppressWarnings("DataFlowIssue")
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<GyroStabilizerBlockEntity>> GYRO_STABILIZER_BE =
+            BLOCK_ENTITIES.register("gyro_stabilizer", () -> BlockEntityType.Builder
+                    .of((pos, state) -> new GyroStabilizerBlockEntity(ModBlocks.GYRO_STABILIZER_BE.get(), pos, state), GYRO_STABILIZER.get()).build(null));
+
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TAB = TABS.register("walkers",
             () -> CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup.walkers"))
@@ -66,6 +78,7 @@ public final class ModBlocks {
                         output.accept(LEG_STRUT_ITEM.get());
                         output.accept(LEG_JOINT_ITEM.get());
                         output.accept(FOOT_PAD_ITEM.get());
+                        output.accept(GYRO_STABILIZER_ITEM.get());
                     })
                     .build());
 

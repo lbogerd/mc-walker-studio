@@ -46,6 +46,12 @@ Things that make physics tests work (all already set up):
   of the hull's weight as feedforward. A critically damped horizontal spring holds each hip over the spot its
   foot touched down; it acts at center-of-mass height so it doesn't tip the hull. Gains scale with the hull's
   effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
+- `walker/GyroStabilizerBlock(Entity)`: the Gyro Stabilizer (D6), a Create stress consumer with a shaft
+  through it. On every physics tick it turns the hull's up axis back toward world up (PD at 2 Hz, critically
+  damped, scaled by the hull's inertia; pitch and roll only). Torque is capped at `TORQUE_PER_RPM × |RPM|`
+  (100 N·m per RPM) and is zero when it isn't spinning or the network is overstressed. Stress impact is
+  8 SU per RPM, so more RPM buys more torque and costs more stress. Both constants are placeholders
+  until calibrated against the studio's `maxTorque` and `stressPerTorque`.
 - `control/SimulatedControls`: reads Simulated's Steering Wheel (`[-1, 1]`) and Throttle Lever (`[0, 1]`).
 - `walker/WalkerControllerBlock` has a horizontal `facing`: the hull's forward (+x in specs), set to the way the
   player looks when placing it.
@@ -117,6 +123,9 @@ and `scanned-hexapod-pair.json`. Copy one to `walkers/<id>.json` and run `npm ru
 | That arm swinging into a free block on a pillar | block knocked 5.2 b (control without the arm: 0.002 b) |
 | Arm built, then the hull turned 90° and moved 3 b | block in the arm's new swing path knocked 4.7 b; block in its old path: 0.002 b |
 | Simulated Throttle Lever / Steering Wheel | read correctly at runtime |
+| Two-legged hull with a sustained side load, no gyro | tips over (50°) |
+| Same, gyro at 1 RPM (100 N·m cap) | saturates and tips over (50°) |
+| Same, gyro at 16 RPM (1600 N·m cap) | stays upright (0.13°, using 268 N·m) and draws 128 SU |
 
 Gotchas found on the way:
 - A ray hit on another sub-level comes back in **that sub-level's plot space**. Project it to world space
@@ -126,8 +135,10 @@ Gotchas found on the way:
   three-argument overload with a separate destination vector.
 - A contraption's kinematic body position (`sable$getPosition()`) is in the parent hull's *plot* space,
   at the contraption's rotating center of mass, not its pivot.
-- Applying horizontal foot forces at the hips (below the center of mass) tips the hull against the vertical
-  springs. Apply them at center-of-mass height.
+- Apply the planted feet's horizontal force **at the hips**. An earlier version applied it at center-of-mass
+  height to fix a tilt, but that tilt really came from stale hulls in the test world. Applying it at the
+  center of mass holds the center of mass over the feet and makes any walker statically stable, so a biped
+  would never need a Gyro Stabilizer.
 
 ## Notes
 

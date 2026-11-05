@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "axis=y": { "model": "walkers:block/gyro_stabilizer" },
+    "axis=z": { "model": "walkers:block/gyro_stabilizer", "x": 90 },
+    "axis=x": { "model": "walkers:block/gyro_stabilizer", "x": 90, "y": 90 }
+  }
+}
