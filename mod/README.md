@@ -18,7 +18,8 @@ maven, at the versions in `reference/create/gradle.properties`.
 ## Commands (all headless unless noted)
 
 ```sh
-./gradlew build                 # compile + jar in build/libs/
+./gradlew build                 # compile + jar in build/libs/ (also runs the unit tests)
+./gradlew test                  # JUnit on the plain JVM, no Minecraft: the walking-loop port vs the studio
 ./gradlew runGameTestServer     # boot a server, run every @GameTest in the "walkers" namespace, exit 1 on failure
 ./gradlew runServer             # dedicated server in run/server (accept the EULA in run/server/eula.txt first)
 ./gradlew runData               # datagen into src/generated/resources
@@ -47,7 +48,54 @@ Things that make physics tests work (all already set up):
   foot touched down; it acts at center-of-mass height so it doesn't tip the hull. Gains scale with the hull's
   effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
 - `control/SimulatedControls`: reads Simulated's Steering Wheel (`[-1, 1]`) and Throttle Lever (`[0, 1]`).
+- `sim/`: the studio's walking loop in plain Java (see "Walking loop port" below). Not wired into the
+  block entity yet.
 - Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests` (11 in total).
+
+## Walking loop port (`com.lbogerd.walkers.sim`)
+
+`com.lbogerd.walkers.sim` mirrors `src/sim` in the studio. After changing either, run `npm run fixtures`
+(in the repo root) and `cd mod && ./gradlew test`. The package uses only the JDK and Gson (no Minecraft,
+Sable, Create or JOML), so it runs in plain JUnit.
+
+| Java | mirrors |
+|---|---|
+| `SimMath` | `math.js` (vectors are `double[3]`, poses are `SimMath.Pose`) |
+| `Terrain` | the terrain object: `int column(ix, iz)` + `heightAt(x, z)`; back it with the world in the mod |
+| `Scenarios` | `terrain.js`: courses, command timelines, `commandAt`, `makeTerrain(name, seed)` |
+| `SpecNormalizer`, `WalkerSpec` | `spec.js`: `normalizeSpec` (same errors and warnings), `restWindows` |
+| `PathPlanner` | `planPath` (incremental: one `step(command)` per tick; `predict`, `rateAt`, `timeAtPhase`) |
+| `GaitController` | the per-tick part of `simulate` (footholds, swing, body pose, sway, suspension, IK) |
+| `Simulate` | `simulate` itself (measurements, events, series, summary) = a `GaitController` fed a timeline |
+| `Evaluate` | `stress`, `totalStress`, `stabilizerHolds` from `evaluate.js` (targets and cost model stay JS-only) |
+
+The live controller is causal: it never sees future commands.
+
+```java
+WalkerSpec spec = SpecNormalizer.normalizeSpec(json, "quad-strider");     // check spec.errors first
+GaitController ctl = new GaitController(spec, terrain, Scenarios.Command.STOP, 0); // runs the warm-up
+GaitController.TickState s = ctl.tick(new Scenarios.Command(throttle, steer));  // one server tick
+s.planned();  s.actual();            // planned hull pose / suspension-follower pose (pos, yaw, pitch, roll)
+s.legs().get(i).st().stance();       // planted or swinging; .target() = foot target, .fh()/.next() = footholds
+s.legs().get(i).foot();              // IK result in world space (also hip, base, knee)
+ctl.decidedFootholds(i);             // every foothold decided so far for leg i
+```
+
+Positions are in the walker's own course frame: it starts at (startX, 0) facing +x with yaw 0, and +yaw turns
+left (toward -z). The mod has to map that frame onto the world (and the hull sub-level) itself.
+
+**Fixtures.** `tools/export-fixtures.mjs` writes `src/test/resources/sim-fixtures/<walker>__<course>.json.gz`
+for every walker × course (frames for every tick 0–600, every per-tick series, all footholds, events and the
+summary), plus `spec-cases.json.gz` (hand-written valid and invalid specs, for `normalizeSpec`'s messages).
+Numbers are rounded to 9 decimals; about 2.5 MB in total. `SimFixtureTest` re-simulates each one and fails
+on the first tick, leg and field that differs by more than 1e-6 (discrete values must match exactly).
+
+**Numerics.** JS numbers and Java doubles are both IEEE-754, so arithmetic matches exactly. For the rest:
+`StrictMath` (fdlibm, like V8) for sin/cos/atan/atan2/acos, and `SimMath.hypot` ports V8's `Math.hypot`
+(`java.lang.Math.hypot` rounds differently). Use them in any new code here. The port is then bit-exact: the
+observed deviation is the fixtures' 5e-10 rounding. Other traps the port handles: `Math.round` (JS rounds
+halves up), `toFixed` and number-to-string in messages (`SimMath.toFixed`, `jsString`), sort comparators
+(`a - b`, where -0 equals 0), `%` (same in both), and `Infinity` (fixtures store it as a string).
 
 ## Spike findings (decisions D1, D2, D5)
 

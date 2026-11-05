@@ -10,6 +10,7 @@
     "report": "node tools/check.mjs --md",
     "test": "node --test tests/*.test.mjs",
     "manifest": "node tools/manifest.mjs",
+    "fixtures": "node tools/export-fixtures.mjs",
     "reference": "bash reference/sync.sh"
   },
   "engines": {
