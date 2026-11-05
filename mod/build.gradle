@@ -33,6 +33,8 @@ repositories {
         forRepository { maven { name = 'Registrate'; url = 'https://maven.ithundxr.dev/snapshots' } }
         filter { includeGroup 'com.tterrag.registrate' }
     }
+    // JUnit for the plain-Java unit tests (src/test)
+    mavenCentral()
 }
 
 sourceSets.main.resources {
@@ -120,6 +122,25 @@ dependencies {
     compileOnly "dev.engine-room.flywheel:flywheel-neoforge-api-${minecraft_version}:${flywheel_version}"
     compileOnly "com.tterrag.registrate:Registrate:${registrate_version}"
     compileOnly files(extractNestedJars.map { it.destinationDir }).builtBy(extractNestedJars).asFileTree.matching { include '*.jar' }
+
+    // Unit tests run on the plain JVM, without Minecraft: they cover com.lbogerd.walkers.sim (the port of the
+    // studio's src/sim), which may only use the JDK and Gson. Gson comes with Minecraft on the main classpath;
+    // the test classpath gets the same version explicitly.
+    testImplementation platform('org.junit:junit-bom:5.12.1')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'com.google.code.gson:gson:2.10.1'
+}
+
+// ./gradlew test: JUnit 5, headless. The walking-loop port is checked against fixtures exported from the
+// studio (npm run fixtures → src/test/resources/sim-fixtures).
+tasks.named('test', Test) {
+    useJUnitPlatform()
+    testLogging {
+        events 'failed'
+        exceptionFormat = 'full'
+        showStandardStreams = true
+    }
 }
 
 // Game tests must start from a fresh world: Sable saves sub-levels with it, and since our tests run near

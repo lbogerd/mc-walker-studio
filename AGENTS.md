@@ -70,7 +70,7 @@ walkerStudio.screenshot();              // PNG data URL of the 3D view
 | change the bar for one walker only | `"targets"` block inside that walker (shown with a `*`) |
 | calibrate server-cost estimates against real profiles | `config/cost-model.json`, then set `"calibrated": true` |
 | add a test course (terrain and/or a throttle/steer `commands` timeline) | `src/sim/terrain.js` → `SCENARIOS` |
-| change how the walking loop works (gait, IK, foothold search, sway) | `src/sim/simulate.js`; keep `npm test` green |
+| change how the walking loop works (gait, IK, foothold search, sway) | `src/sim/simulate.js` *and* its Java mirror in `mod/` (see below); keep `npm test` and `./gradlew test` green |
 
 The simulation core in `src/sim/` is plain ES modules shared by the page and the CLI. Keep it free of DOM
 and three.js code. `src/view/` is browser-only.
@@ -87,8 +87,21 @@ no GPU set up, so verify mod changes headlessly:
 cd mod && ./gradlew runGameTestServer   # exits non-zero if any @GameTest in the "walkers" namespace fails
 ```
 
-Don't use `runClient` on this machine. When the Java walking loop exists, it must reproduce `src/sim/`
-for the walkers in `walkers/`. Keep the two in sync and test that they match.
+Don't use `runClient` on this machine.
+
+### The Java walking loop mirrors `src/sim`
+
+`com.lbogerd.walkers.sim` (in `mod/src/main/java`) is a plain-Java port of `src/sim/` (no Minecraft imports),
+file by file: each Java file names the JS file it mirrors. It must reproduce `src/sim/` for the walkers in
+`walkers/`. **After changing either side, apply the same change to the other, then run:**
+
+```sh
+npm run fixtures                # re-export src/sim results to mod/src/test/resources/sim-fixtures
+cd mod && ./gradlew test        # JUnit, no Minecraft: re-simulates every fixture in Java and compares
+```
+
+Commit the regenerated fixtures with the change. A failure names the first diverging tick, leg and field.
+Don't loosen the tolerance to make it pass: find the root cause (see `mod/README.md`, "Walking loop port").
 
 ## Reference sources (`reference/`)
 

@@ -115,3 +115,8 @@ need a stabilizer. A walker that deliberately trades speed for stability overrid
    arm assembled inside the hull's plot is a colliding Sable kinematic body that follows the hull, and it
    knocks a free block 5.2 b (control without the leg: 0.002 b). When the hull is moved and turned under an
    existing leg, the leg's collision follows it.*
+7. Mod: port the studio's walking loop to Java, and test that it reproduces the studio. *Done:
+   `com.lbogerd.walkers.sim` (plain Java), with a live, causal `GaitController` (one tick per command) that
+   batch `Simulate` reuses. A JUnit fixture test (`npm run fixtures`, `./gradlew test`) matches every walker
+   on every course to within the fixtures' 1e-9 rounding. Next: drive the suspension's foot anchors in
+   `WalkerControllerBlockEntity` from the controller.*
