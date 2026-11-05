@@ -24,6 +24,14 @@ const now = () => (globalThis.performance ? performance.now() : Date.now());
 // land a hair below the integer. Nudge before flooring so constant-speed runs match t / cycleTicks.
 const EPS = 1e-9;
 
+/** Where leg is in its cycle at gait clock P: stance index k, phase within the cycle, planted or swinging. */
+function legAt(leg, P, duty = leg.duty) {
+  const u = P + leg.phase + EPS;
+  const k = Math.floor(u);
+  const phi = u - k;
+  return { k, phi, stance: phi < duty };
+}
+
 function prepLeg(leg, spec) {
   const segs = leg.segments;
   const coxa = segs.length === 3 ? segs[0] : 0;
@@ -40,6 +48,7 @@ function prepLeg(leg, spec) {
   return {
     ...leg,
     coxa, femur, tibia,
+    duty: spec.gait.duty,
     hint: hints[leg.knee],
     footLocal: [leg.mount[0] + leg.neutral[0], 0, leg.mount[2] + leg.neutral[1]],
     outward: [0, 0, side],
@@ -298,10 +307,21 @@ function planPath(spec, legs, commands, tA, tB, x0) {
     }
     return { x, z, yaw };
   };
+  /**
+   * First integer tick whose gait clock satisfies `test` (a predicate that is monotone in Φ: false, then true
+   * from some tick on); tA if it already holds at the start, Infinity if it never does within the plan.
+   */
+  const firstTick = (test) => {
+    if (test(PH[0])) return tA;
+    if (!test(PH[N - 1])) return Infinity;
+    let lo = 1, hi = N - 1;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (test(PH[m])) hi = m; else lo = m + 1; }
+    return tA + lo;
+  };
   /** Gait clock rate over the last tick (causal). */
   const rateAt = (t) => { const j = Math.max(1, Math.min(N - 1, t - tA)); return PH[j] - PH[j - 1]; };
   return {
-    poseAt, phaseAt, timeAtPhase, predict, rateAt, vTop, wTop,
+    poseAt, phaseAt, timeAtPhase, firstTick, predict, rateAt, vTop, wTop,
     at: (t) => { const j = idx(t); return { x: X[j], z: Z[j], yaw: YAW[j], phase: PH[j], v: V[j], w: W[j], activity: ACT[j] }; },
   };
 }
@@ -342,7 +362,10 @@ export function simulate(spec, terrain, opts = {}) {
     f.tDecided = tDecide;
     return f;
   };
-  const liftTick = (li, k) => Math.ceil(path.timeAtPhase(k - 1 - legs[li].phase + duty) - 1e-9);
+  // Lift-off tick of stance k-1: the first tick on which the main loop sees this leg past stance k-1 (in its
+  // swing or later). Uses exactly the main loop's test (legAt), so a foothold is never decided after the tick
+  // that first needs it, however close Φ lands to the lift-off phase.
+  const liftTick = (li, k) => path.firstTick((P) => { const s = legAt(legs[li], P); return s.k > k - 1 || (s.k === k - 1 && !s.stance); });
   const foothold = (li, k, asOf = Infinity) => {
     let f = fhCache[li].get(k);
     if (f) return f;
@@ -401,11 +424,9 @@ export function simulate(spec, terrain, opts = {}) {
     const P = path.at(t);
     // 1. leg targets in world space
     const legState = legs.map((leg, li) => {
-      const u = P.phase + leg.phase + EPS;
-      const k = Math.floor(u);
-      const phi = u - k;
+      const { k, phi, stance } = legAt(leg, P.phase);
       const A = foothold(li, k);
-      if (phi < duty) {
+      if (stance) {
         return { stance: true, target: [A.x, A.y, A.z], ground: A.void ? null : A.y, fh: A, next: null, k, s: null };
       }
       const B = foothold(li, k + 1);
@@ -444,9 +465,9 @@ export function simulate(spec, terrain, opts = {}) {
         const ph = P.phase + path.rateAt(t) * (j / 3) * horizon; // extrapolated from the current rate
         const pts = [];
         legs.forEach((leg, li) => {
-          const u = ph + leg.phase + EPS;
-          if (frac(u) < duty) {
-            const f = foothold(li, Math.floor(u), t);
+          const s = legAt(leg, ph);
+          if (s.stance) {
+            const f = foothold(li, s.k, t);
             if (!f.void) pts.push([f.x, f.z]);
           }
         });
@@ -588,7 +609,7 @@ export function simulate(spec, terrain, opts = {}) {
     if (opts.frames !== false) frames.push({
       t,
       phase: P.phase,
-      body: { pos: pose.pos, yaw: pose.yaw, pitch: act.p, roll: act.r, plannedY: bodyY },
+      body: { pos: pose.pos, yaw: pose.yaw, pitch: act.p, roll: act.r, plannedY: bodyY, plannedPitch: pitch, plannedRoll: roll },
       cmd: { ...commandAt(commands, t), v: P.v * TPS, yawRate: deg(P.w) * TPS, activity: P.activity },
       com: comW,
       hull,
