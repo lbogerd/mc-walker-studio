@@ -71,25 +71,34 @@ public final class WalkingGameTests {
     static int CZ = 30;
 
     static Walker build(GameTestHelper helper) {
+        return build(helper, QUAD_CRAWL, z -> 0, HULL_Y);
+    }
+
+    /**
+     * @param groundTop ground surface height (relative y) for each z; columns are filled from y = 0 up to it
+     * @param hullY     relative y of the hull's block layer
+     */
+    static Walker build(GameTestHelper helper, String spec, java.util.function.IntUnaryOperator groundTop, int hullY) {
         for (int x = 0; x < 16; x++)
-            for (int z = 0; z < 48; z++) helper.setBlock(new BlockPos(x, 0, z), Blocks.SMOOTH_STONE);
+            for (int z = 0; z < 48; z++)
+                for (int y = 0; y <= groundTop.applyAsInt(z); y++) helper.setBlock(new BlockPos(x, y, z), Blocks.SMOOTH_STONE);
         List<BlockPos> blocks = new ArrayList<>();
         for (int x = CX - 2; x <= CX + 2; x++)
             for (int z = CZ - 2; z <= CZ + 2; z++) {
-                helper.setBlock(new BlockPos(x, HULL_Y, z), Blocks.IRON_BLOCK);
-                blocks.add(helper.absolutePos(new BlockPos(x, HULL_Y, z)));
+                helper.setBlock(new BlockPos(x, hullY, z), Blocks.IRON_BLOCK);
+                blocks.add(helper.absolutePos(new BlockPos(x, hullY, z)));
             }
-        BlockPos controller = new BlockPos(CX, HULL_Y + 1, CZ);
+        BlockPos controller = new BlockPos(CX, hullY + 1, CZ);
         helper.setBlock(controller, ModBlocks.WALKER_CONTROLLER.get());
         BlockPos anchor = helper.absolutePos(controller);
         blocks.add(anchor);
-        BlockPos a = helper.absolutePos(new BlockPos(CX - 2, HULL_Y, CZ - 2)), b = helper.absolutePos(new BlockPos(CX + 2, HULL_Y + 1, CZ + 2));
+        BlockPos a = helper.absolutePos(new BlockPos(CX - 2, hullY, CZ - 2)), b = helper.absolutePos(new BlockPos(CX + 2, hullY + 1, CZ + 2));
         ServerSubLevel sub = SubLevelAssemblyHelper.assembleBlocks(helper.getLevel(), anchor, blocks, new BoundingBox3i(
                 Math.min(a.getX(), b.getX()), a.getY(), Math.min(a.getZ(), b.getZ()), Math.max(a.getX(), b.getX()), b.getY(), Math.max(a.getZ(), b.getZ())));
         BlockPos c = sub.getPlot().getCenterBlock();
         var be = (WalkerControllerBlockEntity) sub.getLevel().getBlockEntity(c);
         Vector3d originPlot = new Vector3d(c.getX() + 0.5, c.getY() - 1, c.getZ() + 0.5); // hull bottom-face centre
-        be.configureWalker(QUAD_CRAWL, originPlot, Direction.NORTH, new Suspension(3.0, 1.5, 0.8, 0.5, 5.0));
+        be.configureWalker(spec, originPlot, Direction.NORTH, new Suspension(3.0, 1.5, 0.8, 0.5, 5.0));
         WalkFrame frame = be.walk().frame;
         return new Walker(sub, be, frame, sub.logicalPose().transformPosition(new Vector3d(originPlot)));
     }
@@ -206,6 +215,10 @@ public final class WalkingGameTests {
     }
 
     static void expectWalk(GameTestHelper helper, int rpm, int lever, double minWalked, double maxWalked) {
+        expectWalk(helper, rpm, lever, minWalked, maxWalked, 0.6);
+    }
+
+    static void expectWalk(GameTestHelper helper, int rpm, int lever, double minWalked, double maxWalked, double maxPosErr) {
         Walker w = driven(helper, rpm, lever);
         trace(helper, w, "drive " + rpm + "rpm lever " + lever, 200);
         final int[] g0 = new int[1];
@@ -223,7 +236,7 @@ public final class WalkingGameTests {
                     rpm, lever, walked, w.be().lastThrottle(), posErr, w.be().getSpeed(), w.be().calculateStressApplied());
             if (walked < minWalked || walked > maxWalked)
                 helper.fail("At %d RPM, lever %d, the walker moved %.2f b; expected %.1f..%.1f".formatted(rpm, lever, walked, minWalked, maxWalked));
-            else if (posErr > 0.6) helper.fail("Hull is %.2f b from the plan".formatted(posErr));
+            else if (posErr > maxPosErr) helper.fail("Hull is %.2f b from the plan (allowed %.1f)".formatted(posErr, maxPosErr));
             else helper.succeed();
         });
     }
@@ -236,9 +249,14 @@ public final class WalkingGameTests {
     @GameTest(template = "track", timeoutTicks = 260)
     public static void halfRpmWalksAtHalfSpeed(GameTestHelper helper) { expectWalk(helper, 16, 15, 3.5, 5.5); }
 
-    /** Twice the design RPM: the gait cycle halves and the walker goes twice as fast (D7: RPM drives the legs). */
+    /**
+     * Twice the design RPM: the gait cycle halves and the walker goes twice as fast (D7: RPM drives the legs). This
+     * checks the RPM → gait clock and speed mapping. Tracking is looser here on purpose: at 64 RPM this crawler's sway
+     * lags and its static margin goes negative (studio: +0.02 at 32 RPM, −0.11 at 64), so the real hull wobbles about
+     * ±0.5–0.8 b. Tracking quality is checked at the design RPM.
+     */
     @GameTest(template = "track", timeoutTicks = 260)
-    public static void doubleRpmWalksAtDoubleSpeed(GameTestHelper helper) { expectWalk(helper, 64, 15, 16, 22); }
+    public static void doubleRpmWalksAtDoubleSpeed(GameTestHelper helper) { expectWalk(helper, 64, 15, 16, 22, 1.0); }
 
     /** Lever at 0: the walker stands still even though the shaft turns. */
     @GameTest(template = "track", timeoutTicks = 260)
@@ -388,5 +406,107 @@ public final class WalkingGameTests {
         if (onPillar != 3) helper.fail("Course x=-0.1 (world column 0, the pillar) read %d, expected 3".formatted(onPillar));
         else if (nextColumn != 0) helper.fail("Course x=0.6 (world column 1, the floor) read %d, expected 0".formatted(nextColumn));
         else helper.succeed();
+    }
+
+    // ------------------------------------------------------------------ review round 2
+
+    /**
+     * D4 at any RPM: running the gait at 2× (shaft at twice the design RPM) must not raise the hull's real
+     * acceleration above gait.accel (2 b/s²), from a standstill or when the RPM doubles mid-walk.
+     */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void accelerationStaysLimitedAtHighRpm(GameTestHelper helper) {
+        Walker w = build(helper);
+        final double[] prev = {Double.NaN}, peak = {0}, top = {0};
+        for (int t = 0; t <= 220; t++) {
+            int tick = t;
+            helper.runAfterDelay(t, () -> {
+                // start at 2× from a standstill, drop to 1× at tick 100, back to 2× at tick 140
+                w.be().setManualCommand(tick < 10 ? Scenarios.Command.STOP : new Scenarios.Command(1, 0));
+                w.be().setManualTimeScale(tick >= 100 && tick < 140 ? 1 : 2);
+                double v = w.drive().plannedSpeed();
+                if (!Double.isNaN(prev[0])) peak[0] = Math.max(peak[0], Math.abs(v - prev[0]) * 20);
+                prev[0] = v;
+                top[0] = Math.max(top[0], v);
+            });
+        }
+        helper.runAfterDelay(220, () -> {
+            double limit = w.drive().spec.gait.accel;
+            Walkers.LOG.info("[walk] 2x RPM: peak planned acceleration {} b/s² (limit {}), top speed {} b/s", peak[0], limit, top[0]);
+            if (peak[0] > limit * 1.1) helper.fail("Planned acceleration reached %.2f b/s² at 2× RPM (gait.accel %.1f)".formatted(peak[0], limit));
+            else if (top[0] < 1.8 * w.drive().gaitTopSpeed()) helper.fail("2× RPM only reached %.2f b/s".formatted(top[0]));
+            else helper.succeed();
+        });
+    }
+
+    /**
+     * Reach is checked with the leg's own IK, not just its length. Coxa legs (coxa 3 b, then 1.5 + 1.5): shoved so the
+     * right-hand footholds sit right under their hips, they're within the legs' total length (2 b ≤ 6 b), but the coxa
+     * puts the leg's base 3 b out, so the IK can't reach them and nothing holds the hull up.
+     */
+    static final String COXA_QUAD = """
+            { "name": "test-coxa",
+              "body": { "size": [5, 2, 5], "rideHeight": 2, "blocks": 26 },
+              "legDefaults": { "segments": [3, 1.5, 1.5], "knee": "out" },
+              "legs": [
+                { "id": "FL", "mount": [2, 0, -2], "neutral": [0, -4], "mirror": true },
+                { "id": "HL", "mount": [-2, 0, -2], "neutral": [0, -4], "mirror": true } ],
+              "gait": { "preset": "wave", "duty": 0.8, "stride": 1.5, "stepHeight": 0.8 },
+              "drive": { "rpm": 32 } }
+            """;
+
+    @GameTest(template = "track", timeoutTicks = 200)
+    public static void unreachableByIkIsNotSupport(GameTestHelper helper) {
+        Walker w = build(helper, COXA_QUAD, z -> 0, 4);
+        w.be().setManualCommand(Scenarios.Command.STOP);
+        final double[] before = new double[1];
+        helper.runAfterDelay(60, () -> {
+            before[0] = heightAboveGround(helper, w);
+            // move the hull 4 b to its right (+x for a north-facing hull) so the right footholds are under the hips
+            Vector3d pos = new Vector3d(w.subLevel().logicalPose().position()).add(4, 0, 0);
+            dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(helper.getLevel()).physicsSystem().getPipeline()
+                    .teleport(w.subLevel(), pos, new org.joml.Quaterniond(w.subLevel().logicalPose().orientation()));
+        });
+        helper.runAfterDelay(120, () -> {
+            double h = heightAboveGround(helper, w);
+            Walkers.LOG.info("[walk] coxa legs shoved under their footholds: height {} → {}, planted {}", before[0], h, w.drive().lastPlanted());
+            if (Math.abs(before[0] - 2) > 0.4) helper.fail("Coxa walker didn't stand at ride height first (%.2f)".formatted(before[0]));
+            else if (w.drive().lastPlanted() > 0) helper.fail("%d legs count as planted though their IK can't reach".formatted(w.drive().lastPlanted()));
+            else if (h > before[0] - 1) helper.fail("Hull still held at %.2f by legs that can't reach".formatted(h));
+            else helper.succeed();
+        });
+    }
+
+    /**
+     * A long descent: a 1-in-2 staircase down 10 blocks, more than the walking loop's VOID depth (8) below the start.
+     * The course frame re-bases as the walker descends, so it keeps finding ground all the way down.
+     */
+    @GameTest(template = "descent", timeoutTicks = 300)
+    public static void walksDownALongStaircase(GameTestHelper helper) {
+        java.util.function.IntUnaryOperator ground = z -> Math.max(0, Math.min(12, (z - 6) / 2));
+        Walker w = build(helper, QUAD_CRAWL, ground, ground.applyAsInt(CZ) + 4);
+        // at 2× it covers the 24 b of stairs in ~250 ticks; check while it's still on the course (it ends at z = 0)
+        for (int t = 0; t <= 250; t++) {
+            int tick = t;
+            helper.runAfterDelay(t, () -> {
+                w.be().setManualCommand(tick < 20 ? Scenarios.Command.STOP : new Scenarios.Command(1, 0));
+                w.be().setManualTimeScale(2);
+            });
+        }
+        trace(helper, w, "descent", 250);
+        helper.runAfterDelay(250, () -> {
+            Vector3d o = w.origin();
+            double walked = w.start().z - o.z;
+            int localZ = (int) Math.floor(o.z - helper.absolutePos(BlockPos.ZERO).getZ());
+            double groundHere = helper.absolutePos(new BlockPos(0, ground.applyAsInt(localZ) + 1, 0)).getY();
+            double h = o.y - groundHere, descended = w.start().y - o.y;
+            Walkers.LOG.info("[walk] descent: walked {} b, descended {} b, height above local ground {}, rebases {}, planted {}",
+                    walked, descended, h, w.drive().rebases(), w.drive().lastPlanted());
+            if (descended < 8.5) helper.fail("Only descended %.2f b (walked %.2f b)".formatted(descended, walked));
+            else if (Math.abs(h - 3) > 0.8) helper.fail("Hull rides %.2f above the stairs, expected 3".formatted(h));
+            else if (w.drive().lastPlanted() < 3) helper.fail("Only %d feet planted at the bottom".formatted(w.drive().lastPlanted()));
+            else if (w.drive().rebases() < 1) helper.fail("The course frame never re-based");
+            else helper.succeed();
+        });
     }
 }

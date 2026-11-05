@@ -171,6 +171,10 @@ walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's b
   - **The shaft drives the legs (D7):** the loop runs |RPM| ÷ the spec's `drive.rpm` design ticks per server
     tick, accumulated. Twice the RPM halves the gait cycle and doubles the top speed, and stress doubles with
     it. No rotation freezes the legs where they are.
+  - **Acceleration stays at `gait.accel` at any RPM (D4):** the planner's limits are scaled by 1/scale², and
+    RPM changes are rate-limited, so the speed can't jump.
+  - **Long climbs and descents:** whenever the plan drifts more than 4 b from ride height, the course origin
+    re-bases vertically (`GaitController.rebaseY`), so heights never reach the walking loop's VOID (−8).
   - **History is trimmed** every 200 gait ticks (`GaitController.trimHistory`), so memory stays bounded. This
     doesn't change any result.
   - **`WorldTerrain` feeds it the real ground:** heights at the exact world point under each foot, found by
@@ -178,8 +182,9 @@ walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's b
 - **Every physics tick:** each **planted** leg pushes its hip toward the plan's hip position. It uses a
   spring-damper toward the planned position and velocity, plus a share of the weight. Legs push but never pull,
   and a friction cone limits the horizontal force (μ = 1). Swinging legs don't push. A stance leg only counts
-  if its foothold is within the leg's reach of the **actual** hip and its ground block still exists. So the
-  hull is only held where feet are really planted, and an unstable gait needs a Gyro Stabilizer.
+  if **the leg's own IK**, solved from the **actual** hull, reaches its foothold (within 0.1 b) and the ground
+  block still exists. So the hull is only held where feet are really planted, and an unstable gait needs a
+  Gyro Stabilizer.
 - **Controls (D5, D7):** the controller is a Create kinetic block. Its shaft goes into the **back** face.
   - A Creative Motor set to a positive speed walks forward. The direction is relative to the controller's
     facing; reverse the shaft to back up.
@@ -197,7 +202,10 @@ walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's b
 | Walk, then stop | stops where the plan stops (0.00002 b/s), 4 feet planted |
 | Motor at the design RPM (32), full lever | 10.2 b forward in 10 s |
 | Half the design RPM | 4.9 b (half speed; gait clock at 0.5×) |
-| Twice the design RPM | 20.9 b (double speed; gait clock at 2×) |
+| Twice the design RPM | 20.3 b (double speed; gait clock at 2×). This crawler's margin goes negative at 64 RPM (studio −0.11), so it wobbles ±0.5–0.8 b around the plan |
+| Starting at 2× RPM, and RPM changing mid-walk | planned acceleration peaks at 2.00 b/s² = `gait.accel` |
+| Coxa legs shoved so their footholds sit under the hips (within leg length, but out of IK reach) | no leg counts as planted; the hull drops |
+| 1-in-2 staircase down 11 b (deeper than VOID) | walks down it; the frame re-bases twice; 3 feet planted at the bottom |
 | Lever at 0 | stands still |
 | Reversed shaft | 10.5 b backward |
 | Steering Wheel held at full lock | steer 1.0, turns 139° left in place |

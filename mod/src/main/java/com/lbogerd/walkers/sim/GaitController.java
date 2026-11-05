@@ -178,7 +178,7 @@ public final class GaitController {
     /** IK result in the hull frame. status: "ok", "over" (out of reach) or "under" (inside min reach). */
     public record LegSolution(double[] base, double[] knee, double[] foot, String status, double util) {}
 
-    static LegSolution solveLeg(SimLeg leg, double[] targetL) {
+    public static LegSolution solveLeg(SimLeg leg, double[] targetL) {
         double[] hip = leg.mount;
         double[] base = hip;
         if (leg.coxa > 0) {
@@ -332,6 +332,18 @@ public final class GaitController {
             int k = legAt(legs.get(i), phase).k();
             fhCache.get(i).keySet().removeIf(kk -> kk < k - 2);
         }
+    }
+
+    /**
+     * Live use only (no JS counterpart): move the course frame's y origin up by {@code dy} blocks, shifting every
+     * stored height down by the same amount, so a walker that climbs or descends far keeps its heights near 0 and
+     * never hits {@link Terrain#VOID}. The caller moves its world mapping up by dy at the same time.
+     */
+    public void rebaseY(int dy) {
+        if (dy == 0) return;
+        for (Map<Integer, Foothold> m : fhCache) for (Foothold f : m.values()) if (!f.isVoid) f.y -= dy;
+        if (bodyY != null) bodyY -= dy;
+        actY -= dy;
     }
 
     /** Footholds held per leg (for tests of {@link #trimHistory}). */

@@ -33,7 +33,9 @@ public final class PathPlanner {
     /** Hull pose on the ground plane. */
     public record Pose2(double x, double z, double yaw) {}
 
-    private final double T, duty, vTop, wTop, aLin, aYaw, settle, restPhase;
+    private final double T, duty, vTop, wTop, settle, restPhase;
+    private double aLin, aYaw;
+    private final double aLin0, aYaw0;
     private final int restN;
     private final double[][] feet;
     private final double[] legPhase;
@@ -50,8 +52,8 @@ public final class PathPlanner {
         vTop = spec.gait.stride / T;
         double R = spec.turnRadius;
         wTop = vTop / R;
-        aLin = spec.gait.accel / (TPS * TPS);
-        aYaw = aLin / R;
+        aLin = aLin0 = spec.gait.accel / (TPS * TPS);
+        aYaw = aYaw0 = aLin / R;
         settle = spec.gait.settleRate;
         restPhase = spec.gait.restPhase;
         restN = spec.gait.restPlanted; // feet planted in the rest stance
@@ -163,6 +165,15 @@ public final class PathPlanner {
         for (double[] a : new double[][] {X, Z, YAW, PH, V, W, ACT, TV, TW}) System.arraycopy(a, drop, a, 0, n - drop);
         n -= drop;
         tA += drop;
+    }
+
+    /**
+     * Live use only (no JS counterpart): scale the acceleration limits. When the gait clock runs {@code s} design
+     * ticks per real tick (shaft RPM, D7), pass 1/s² so the hull's acceleration in real time stays gait.accel.
+     */
+    public void setAccelScale(double f) {
+        aLin = aLin0 * f;
+        aYaw = aYaw0 * f;
     }
 
     /** Number of ticks currently held. */

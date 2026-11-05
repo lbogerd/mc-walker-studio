@@ -43,6 +43,16 @@ public final class WalkFrame {
         return localDirToPlot(p[0], p[1], p[2]).add(originPlot);
     }
 
+    /** Plot point → spec-local point (inverse of {@link #localToPlot}). */
+    public double[] plotToLocal(Vector3d plot) {
+        Direction right = forward.getClockWise();
+        double dx = plot.x - originPlot.x, dy = plot.y - originPlot.y, dz = plot.z - originPlot.z;
+        return new double[] {
+                dx * forward.getStepX() + dz * forward.getStepZ(),
+                dy,
+                dx * right.getStepX() + dz * right.getStepZ()};
+    }
+
     /** Course point → world point. */
     public Vector3d courseToWorld(double[] p) {
         return new Vector3d(p[0], p[1], p[2]).rotateY(courseYaw).add(courseOrigin);
