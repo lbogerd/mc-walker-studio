@@ -47,7 +47,62 @@ Things that make physics tests work (all already set up):
   foot touched down; it acts at center-of-mass height so it doesn't tip the hull. Gains scale with the hull's
   effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
 - `control/SimulatedControls`: reads Simulated's Steering Wheel (`[-1, 1]`) and Throttle Lever (`[0, 1]`).
-- Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests` (11 in total).
+- `walker/WalkerControllerBlock` has a horizontal `facing`: the hull's forward (+x in specs), set to the way the
+  player looks when placing it.
+- `leg/`: the leg blocks of decision D3: `leg_actuator` (hip, `facing` = toward the leg), `leg_strut` (`axis`),
+  `leg_joint` (`facing` = knee hint for straight legs) and `foot_pad`, plus `LegParts` to classify a block state.
+  All five walker blocks are in the "Walkers" creative tab.
+- `assembly/LegScanner`: measures block-built legs on any `BlockGetter` before assembly (see "Building legs").
+  `scan(level, controller, walkerBlocks)` returns a `LegScan`: the `HullFrame`, the hull / actuator / per-leg
+  partition, one `MeasuredLeg` per actuator, errors and warnings. `collect(level, controller, max)` flood-fills a
+  walker's blocks. `WalkerSpecJson.toSpecJson(scan, options)` writes a spec the studio loads.
+- Tests: `SuspensionGameTests`, `ContraptionLegGameTests`, `ControlsGameTests`, `SetupGameTests`,
+  `LegScannerGameTests` (28 in total).
+
+## Building legs (decision D3)
+
+A leg is a chain of blocks: **Leg Actuator → Leg Struts / Leg Joints → Foot Pad**.
+
+- Put the **Leg Actuator** against the hull; it faces away from the face you click. The chain starts at the
+  block in front of it. The actuator stays on the hull (like a Mechanical Bearing); the chain is the leg.
+- Struts and joints connect through faces. The chain must not fork, loop, or touch anything except its own
+  actuator and, under the Foot Pad, the ground: no other leg, no hull block, no world block.
+- **1 Leg Joint** makes a 2-segment leg `[upper, lower]`; **2 joints** make `[coxa, upper, lower]`.
+
+How `LegScanner` measures it (all in hull axes, as in `docs/walker-spec.md`):
+
+| | rule |
+|---|---|
+| forward (+x) | the Walker Controller's `facing`; +z is to its right, +y up |
+| origin | centre of the bottom face of the hull blocks' bounding box (hull = walker blocks that aren't leg parts; actuators left out) |
+| pivots | block centres: actuator, each joint in chain order, foot pad |
+| `mount` | the actuator's centre |
+| `segments` | straight distances between consecutive pivots. A segment is one rigid body, so an L-shaped or staircase run of struts is a bent link measured end to end; straight runs give integers (actuator, 2 struts, joint = 3) |
+| `neutral` | foot pad centre minus mount, `[dx, dz]` |
+| `knee` | the knee joint's (last joint's) offset from the line base → foot (base = actuator, or the first joint with a coxa). Over ¼ block: the studio hint whose IK pole points closest to the offset. A straight leg: the Leg Joint's `facing` instead (place it looking the way the knee should bend; along the leg it says nothing, and you get a warning) |
+| ids | per side (L = −z, R = +z, C = centre line), front to back: `F`,`H` / `F`,`M`,`H` / `F`,`M1`…,`H`, or just `L`/`R` for one leg per side. A right leg that exactly mirrors the left leg of the same rank gets `mirrorOf` and is written as `"mirror": true` |
+| `body` | `size` = hull bounding box `[forward, up, sideways]`; `blocks` = hull blocks without actuators (the studio adds hips, joints, struts and feet from its bill of materials); `rideHeight` = hull bottom above the foot points as built, unless overridden |
+
+```
+ side view, forward →            measured (hull 8×3×6, forward = east)
+ y=8  [hull ............. hull]
+ y=7     A(hind)        A(front)  mount  [3.5, -0.5, -2.5]   (front left)
+ y=6     s              s
+ y=5     s              s         upper  7.5 - 4.5 = 3
+ y=4     J→             ←J        knee   "back" (joint faces back; leg is straight)
+ y=3     s              s
+ y=2     s              s         lower  4.5 - 1.5 = 3
+ y=1     F              F         neutral [0, 0], rideHeight as built 6.5
+ y=0  ground
+```
+
+**The foot point is the Foot Pad's centre**, so in the world the pad's centre sits half a block above the ground the
+studio sees (the studio puts the foot point on the ground). The walking loop should aim the pad's centre at
+`ground + 0.5`. Legs built straight are at full reach as built; pass a lower `rideHeight` to `WalkerSpecJson.Options`.
+
+**Open a scanned walker in the studio.** `LegScannerGameTests` writes `run/gametest/walker-scans/scanned-quad.json`
+and `scanned-hexapod-pair.json`. Copy one to `walkers/<id>.json` and run `npm run check -- <id>` or open
+`http://localhost:5177/?walkers=<id>`; or paste it into the page with `await walkerStudio.load('scan', spec)`.
 
 ## Spike findings (decisions D1, D2, D5)
 

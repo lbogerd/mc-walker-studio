@@ -44,6 +44,10 @@ direction. This produces the same leg data as `walkers/*.json` (`mount`, `neutra
 - **Why:** the most room for player expression, and a 1:1 mapping onto the studio's spec.
 - **Not chosen:** a single configurable leg block (every walker looks the same), and blocks plus a tuning
   GUI (more UI work; gait tuning can arrive later as an extra).
+- **Progress:** the four blocks and the leg scanner exist (`mod/src/main/java/com/lbogerd/walkers/leg`,
+  `assembly/LegScanner`): it measures `mount`, `neutral`, `segments` and `knee`, splits the walker into hull
+  and legs, validates the chains and writes a spec the studio loads. Conventions: `mod/README.md`, "Building
+  legs". Still to do: animating the measured legs and assembling them as contraptions (D2).
 
 ## D4: v1 covers forward/back, turning and start/stop
 

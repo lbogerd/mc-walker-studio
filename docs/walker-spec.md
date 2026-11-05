@@ -73,6 +73,13 @@ Coordinates are in **blocks**, relative to the **centre of the hull's bottom fac
 }
 ```
 
+## Block-built legs (mod)
+
+In the mod, players build legs from blocks (decision D3) and `LegScanner` measures them into this format:
+`mount` is the Leg Actuator's centre, `segments` are the distances between pivot block centres (actuator,
+Leg Joints, Foot Pad), the foot point is the Foot Pad's centre, and forward is the Walker Controller's
+facing. Details and the knee rule: `mod/README.md`, "Building legs".
+
 ## Physics
 
 ### `physics.stabilizer` (Gyro Stabilizer, decision D6)
