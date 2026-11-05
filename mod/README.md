@@ -42,11 +42,13 @@ Things that make physics tests work (all already set up):
 
 ## Code so far
 
-- `walker/WalkerControllerBlockEntity`: a Sable `BlockEntitySubLevelActor`. On every physics tick, each hip
-  casts down to the ground. Planted hips push the hull with a spring-damper toward `rideHeight`, with a share
-  of the hull's weight as feedforward. A critically damped horizontal spring holds each hip over the spot its
-  foot touched down; it acts at center-of-mass height so it doesn't tip the hull. Gains scale with the hull's
-  effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
+- `walker/WalkerControllerBlockEntity`: a Create kinetic block and a Sable `BlockEntitySubLevelActor`.
+  - **Walk mode** (see "Walking" below): the walking loop plans the hull's motion and the planted legs push it.
+  - **Fixed-hip mode** (used by the suspension tests): every physics tick each hip casts down to the ground.
+    Planted hips push the hull with a spring-damper toward `rideHeight`, plus a share of its weight. A
+    critically damped horizontal spring holds each hip over where its foot touched down.
+  - In both modes the horizontal foot force acts **at the hip**, as a real leg would. Gains scale with the
+    hull's effective mass at each hip, like Offroad's wheels. Tuning lives in `walker/Suspension`.
 - `walker/GyroStabilizerBlock(Entity)`: the Gyro Stabilizer (D6), a Create stress consumer with a shaft
   through it. On every physics tick it turns the hull's up axis back toward world up (PD at 2 Hz, critically
   damped, scaled by the hull's inertia; pitch and roll only). Torque is capped at `TORQUE_PER_RPM × |RPM|`
@@ -164,17 +166,25 @@ halves up), `toFixed` and number-to-string in messages (`SimMath.toFixed`, `jsSt
 walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's bottom-face centre in plot space.
 
 - **Every server tick:** the controller turns its controls into a command, and `WalkDriver` advances the ported
-  walking loop (`sim.GaitController`) one tick. The loop is causal, so footholds are decided at lift-off from
-  what's known then. On its first tick the driver fixes the walker's course frame in the world (`WalkFrame`).
-  `WorldTerrain` feeds it the real ground: the first block with a collision shape in each column.
+  walking loop (`sim.GaitController`). The loop is causal, so footholds are decided at lift-off from what's
+  known then. On its first tick the driver fixes the walker's course frame in the world (`WalkFrame`).
+  - **The shaft drives the legs (D7):** the loop runs |RPM| ÷ the spec's `drive.rpm` design ticks per server
+    tick, accumulated. Twice the RPM halves the gait cycle and doubles the top speed, and stress doubles with
+    it. No rotation freezes the legs where they are.
+  - **History is trimmed** every 200 gait ticks (`GaitController.trimHistory`), so memory stays bounded. This
+    doesn't change any result.
+  - **`WorldTerrain` feeds it the real ground:** heights at the exact world point under each foot, found by
+    scanning **down from the hull's bottom**, so roofs and bridges above the walker aren't taken for ground.
 - **Every physics tick:** each **planted** leg pushes its hip toward the plan's hip position. It uses a
   spring-damper toward the planned position and velocity, plus a share of the weight. Legs push but never pull,
-  and a friction cone limits the horizontal force (μ = 1). Swinging legs don't push. So the hull is only held
-  where feet are planted, and an unstable gait needs a Gyro Stabilizer.
+  and a friction cone limits the horizontal force (μ = 1). Swinging legs don't push. A stance leg only counts
+  if its foothold is within the leg's reach of the **actual** hip and its ground block still exists. So the
+  hull is only held where feet are really planted, and an unstable gait needs a Gyro Stabilizer.
 - **Controls (D5, D7):** the controller is a Create kinetic block. Its shaft goes into the **back** face.
   - A Creative Motor set to a positive speed walks forward. The direction is relative to the controller's
     facing; reverse the shaft to back up.
-  - throttle = Throttle Lever (0–1, full if there's none) × min(1, |RPM| / the spec's `drive.rpm`) × direction.
+  - throttle = Throttle Lever (0–1, full if there's none) × direction. RPM sets the gait's speed (above), not
+    the throttle.
   - steer = Steering Wheel angle ÷ its max angle (−1–1). Positive turns left, as in the studio.
   - No rotation, or an overstressed network, means the walker stands.
   - Stress impact per RPM comes from the spec: legs × `stressPerLegPerRpm` + mass × `stressPerBlockPerRpm`.
@@ -186,11 +196,16 @@ walk mode. `specJson` is a walkers/*.json spec, and `originPlot` is the hull's b
 | Turn in place | 158° against a plan of 157°, 0.69 b drift |
 | Walk, then stop | stops where the plan stops (0.00002 b/s), 4 feet planted |
 | Motor at the design RPM (32), full lever | 10.2 b forward in 10 s |
-| Half the design RPM | 4.9 b (half speed) |
+| Half the design RPM | 4.9 b (half speed; gait clock at 0.5×) |
+| Twice the design RPM | 20.9 b (double speed; gait clock at 2×) |
 | Lever at 0 | stands still |
 | Reversed shaft | 10.5 b backward |
 | Steering Wheel held at full lock | steer 1.0, turns 139° left in place |
-| Stress | 19.1 SU/RPM, matching the spec formula |
+| Stress | 19.1 SU/RPM, matching the spec formula; Create's network reports 611 SU at 32 RPM; clients see the impact |
+| Ground removed under a standing walker | falls into the hole (no leg counts as planted) |
+| Hull shoved 7 b sideways, beyond leg reach | falls; isn't pulled back |
+| Walking under a ceiling 5 blocks above the hull | rides at 3.00 b, not on the ceiling |
+| Course frame half a block off the grid | heights read from the right world column |
 
 **Finding: a plan can ask more than the feet can give.** With full hull sway (`comShift: 1`) the plan needed
 ~30 b/s² of sideways acceleration. Planted feet couldn't push that hard (friction), so the real hull swung up to

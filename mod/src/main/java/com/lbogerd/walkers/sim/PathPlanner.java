@@ -37,8 +37,8 @@ public final class PathPlanner {
     private final int restN;
     private final double[][] feet;
     private final double[] legPhase;
-    /** First tick held (the start of the warm-up, -warm). */
-    public final int tA;
+    /** First tick held: the start of the warm-up (-warm), or later once {@link #trimBefore} dropped old history. */
+    public int tA;
     private final double v0, w0, rate0;
 
     private int n; // number of ticks held: tA .. tA + n - 1
@@ -151,6 +151,22 @@ public final class PathPlanner {
         V[i + 1] = v; W[i + 1] = w; ACT[i + 1] = activity(v, w);
         n++;
     }
+
+    /**
+     * Live use only (Java, no JS counterpart): forget ticks before {@code t} so a long-running controller's history
+     * stays bounded. Batch runs never trim, so they stay identical to src/sim. Queries before the new first tick
+     * are no longer answered from history (callers must only ask about recent ticks).
+     */
+    public void trimBefore(int t) {
+        int drop = Math.min(t - tA, n - 2);
+        if (drop <= 0) return;
+        for (double[] a : new double[][] {X, Z, YAW, PH, V, W, ACT, TV, TW}) System.arraycopy(a, drop, a, 0, n - drop);
+        n -= drop;
+        tA += drop;
+    }
+
+    /** Number of ticks currently held. */
+    public int heldTicks() { return n; }
 
     private void grow() {
         int cap = X.length * 2;

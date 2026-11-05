@@ -208,7 +208,15 @@ public final class WalkingGameTests {
     static void expectWalk(GameTestHelper helper, int rpm, int lever, double minWalked, double maxWalked) {
         Walker w = driven(helper, rpm, lever);
         trace(helper, w, "drive " + rpm + "rpm lever " + lever, 200);
+        final int[] g0 = new int[1];
+        helper.runAfterDelay(40, () -> g0[0] = w.drive().gaitTicks());
         helper.runAfterDelay(200, () -> {
+            // D7: the shaft drives the gait clock: |RPM| / design RPM gait ticks per server tick
+            double rate = (w.drive().gaitTicks() - g0[0]) / 160.0, expectRate = Math.abs(rpm) / 32.0;
+            if (Math.abs(rate - expectRate) > 0.05 * expectRate + 0.01) {
+                helper.fail("Gait ran %.3f ticks per tick at %d RPM; expected %.3f".formatted(rate, rpm, expectRate));
+                return;
+            }
             Vector3d o = w.origin(), plan = w.drive().plannedOriginWorld();
             double walked = w.start().z - o.z, posErr = Math.hypot(o.x - plan.x, o.z - plan.z);
             Walkers.LOG.info("[walk] driven rpm={} lever={}: walked {} b, throttle {}, posErr {}, controller speed {} RPM, stress impact {} SU/RPM",
@@ -228,6 +236,10 @@ public final class WalkingGameTests {
     @GameTest(template = "track", timeoutTicks = 260)
     public static void halfRpmWalksAtHalfSpeed(GameTestHelper helper) { expectWalk(helper, 16, 15, 3.5, 5.5); }
 
+    /** Twice the design RPM: the gait cycle halves and the walker goes twice as fast (D7: RPM drives the legs). */
+    @GameTest(template = "track", timeoutTicks = 260)
+    public static void doubleRpmWalksAtDoubleSpeed(GameTestHelper helper) { expectWalk(helper, 64, 15, 16, 22); }
+
     /** Lever at 0: the walker stands still even though the shaft turns. */
     @GameTest(template = "track", timeoutTicks = 260)
     public static void leverAtZeroStandsStill(GameTestHelper helper) { expectWalk(helper, 32, 0, -0.2, 0.2); }
@@ -238,16 +250,27 @@ public final class WalkingGameTests {
         expectWalk(helper, -32, 15, -11, -7);
     }
 
-    /** The walker is a Create stress consumer: impact per RPM from its spec (legs × 4 + mass × 0.05 by default). */
+    /**
+     * The walker is a Create stress consumer: impact per RPM from its spec (legs × 4 + mass × 0.05 by default). Create's
+     * network accounts for it (stress = impact × RPM), and the impact reaches clients (goggle tooltips).
+     */
     @GameTest(template = "track", timeoutTicks = 100)
     public static void walkerDrawsStressFromItsSpec(GameTestHelper helper) {
         Walker w = driven(helper, 32, 0);
         helper.runAfterDelay(20, () -> {
             double expected = WalkerControllerBlockEntity.stressImpactPerRpm(w.drive().spec);
             double impact = w.be().calculateStressApplied();
-            Walkers.LOG.info("[walk] stress impact {} SU/RPM (spec {}), speed {} RPM, overstressed {}", impact, expected, w.be().getSpeed(), w.be().isOverStressed());
+            double network = w.be().networkStress();
+            // what a client gets: the update tag read into a fresh block entity with no walker spec
+            var registries = helper.getLevel().registryAccess();
+            var copy = new WalkerControllerBlockEntity(w.be().getBlockPos(), w.be().getBlockState());
+            copy.handleUpdateTag(w.be().getUpdateTag(registries), registries);
+            double client = copy.calculateStressApplied();
+            Walkers.LOG.info("[walk] stress impact {} SU/RPM (spec {}), network stress {} SU at {} RPM, client sees {}",
+                    impact, expected, network, w.be().getSpeed(), client);
             if (Math.abs(impact - expected) > 1e-3 || expected <= 0) helper.fail("Stress impact %.2f, expected %.2f".formatted(impact, expected));
-            else if (w.be().getSpeed() == 0) helper.fail("The controller isn't turning");
+            else if (Math.abs(network - expected * Math.abs(w.be().getSpeed())) > 0.5) helper.fail("Network stress %.1f SU, expected %.1f".formatted(network, expected * Math.abs(w.be().getSpeed())));
+            else if (Math.abs(client - expected) > 1e-3) helper.fail("A client would see a stress impact of %.2f".formatted(client));
             else helper.succeed();
         });
     }
@@ -281,5 +304,89 @@ public final class WalkingGameTests {
             else if (drift > 1.5) helper.fail("Walker drifted %.2f b while turning in place".formatted(drift));
             else helper.succeed();
         });
+    }
+
+    // ------------------------------------------------------------------ support must be real (review round 1)
+
+    static double heightAboveGround(GameTestHelper helper, Walker w) {
+        return w.origin().y - helper.absolutePos(new BlockPos(0, 1, 0)).getY();
+    }
+
+    /** Remove the ground under a standing walker: its feet have nothing to push on, so it must fall. */
+    @GameTest(template = "track", timeoutTicks = 200)
+    public static void walkerFallsWhenItsGroundIsRemoved(GameTestHelper helper) {
+        Walker w = build(helper);
+        w.be().setManualCommand(Scenarios.Command.STOP);
+        final double[] before = new double[1];
+        helper.runAfterDelay(60, () -> {
+            before[0] = heightAboveGround(helper, w);
+            for (int x = CX - 5; x <= CX + 5; x++)
+                for (int z = CZ - 5; z <= CZ + 5; z++)
+                    for (int y = -3; y <= 0; y++) helper.setBlock(new BlockPos(x, y, z), Blocks.AIR);
+        });
+        helper.runAfterDelay(120, () -> {
+            double h = heightAboveGround(helper, w);
+            Walkers.LOG.info("[walk] ground removed: height {} → {}, planted {}", before[0], h, w.drive().lastPlanted());
+            if (h > before[0] - 1.5) helper.fail("Walker still held at %.2f (was %.2f) with no ground under its feet".formatted(h, before[0]));
+            else if (w.drive().lastPlanted() > 0) helper.fail("%d legs still count as planted over a hole".formatted(w.drive().lastPlanted()));
+            else helper.succeed();
+        });
+    }
+
+    /** Shove the hull sideways beyond its legs' reach: the planted feet can't hold or pull it back, so it must fall. */
+    @GameTest(template = "track", timeoutTicks = 200)
+    public static void walkerShovedOutOfReachFalls(GameTestHelper helper) {
+        Walker w = build(helper);
+        w.be().setManualCommand(Scenarios.Command.STOP);
+        final double[] x0 = new double[1];
+        helper.runAfterDelay(60, () -> {
+            x0[0] = w.origin().x;
+            Vector3d pos = new Vector3d(w.subLevel().logicalPose().position()).add(7, 0, 0);
+            dev.ryanhcode.sable.api.sublevel.SubLevelContainer.getContainer(helper.getLevel()).physicsSystem().getPipeline()
+                    .teleport(w.subLevel(), pos, new org.joml.Quaterniond(w.subLevel().logicalPose().orientation()));
+        });
+        helper.runAfterDelay(120, () -> {
+            double h = heightAboveGround(helper, w), dx = w.origin().x - x0[0];
+            Walkers.LOG.info("[walk] shoved 7 b: still {} b over, height {}, planted {}", dx, h, w.drive().lastPlanted());
+            if (dx < 5) helper.fail("The walker was pulled back to %.2f b from its feet".formatted(dx));
+            else if (h > 1.5) helper.fail("Walker still held %.2f b up with its feet out of reach".formatted(h));
+            else helper.succeed();
+        });
+    }
+
+    /** A ceiling over the walker is not ground: it walks under it at ride height. */
+    @GameTest(template = "track", timeoutTicks = 200)
+    public static void walksUnderACeiling(GameTestHelper helper) {
+        for (int x = 0; x < 16; x++)
+            for (int z = CZ - 14; z <= CZ + 3; z++) helper.setBlock(new BlockPos(x, HULL_Y + 5, z), Blocks.STONE);
+        Walker w = build(helper);
+        commands(helper, w, t -> t < 20 ? Scenarios.Command.STOP : new Scenarios.Command(1, 0), 150);
+        helper.runAfterDelay(150, () -> {
+            double h = heightAboveGround(helper, w), walked = w.start().z - w.origin().z;
+            Walkers.LOG.info("[walk] under a ceiling: height {}, walked {} b", h, walked);
+            if (Math.abs(h - 3.0) > 0.5) helper.fail("Under a ceiling the hull rides at %.2f, expected 3".formatted(h));
+            else if (walked < 5) helper.fail("Walker only got %.2f b under the ceiling".formatted(walked));
+            else helper.succeed();
+        });
+    }
+
+    /**
+     * Terrain is sampled at the exact point, not a course cell's centre. Course origin half a block off the grid:
+     * course x = 0.1 lies in world column 0 (a 3-high pillar), while its cell centre (x = 0.5) lies in column 1 (floor).
+     */
+    @GameTest(template = "track")
+    public static void terrainSamplesTheExactPoint(GameTestHelper helper) {
+        for (int x = 0; x < 4; x++) helper.setBlock(new BlockPos(x, 0, 5), Blocks.STONE);
+        for (int y = 1; y <= 3; y++) helper.setBlock(new BlockPos(0, y, 5), Blocks.STONE);
+        BlockPos o = helper.absolutePos(new BlockPos(0, 1, 5));
+        WalkFrame frame = new WalkFrame(new Vector3d(), Direction.EAST);
+        frame.courseOrigin.set(o.getX() + 0.5, o.getY(), o.getZ() + 0.5);
+        frame.courseYaw = 0; // course +x = world +x
+        var terrain = new com.lbogerd.walkers.walker.WorldTerrain(helper.getLevel(), frame, o.getY() + 6);
+        int onPillar = terrain.heightAt(-0.1, 0), nextColumn = terrain.heightAt(0.6, 0);
+        Walkers.LOG.info("[walk] terrain: course x=-0.1 → {}, x=0.6 → {}", onPillar, nextColumn);
+        if (onPillar != 3) helper.fail("Course x=-0.1 (world column 0, the pillar) read %d, expected 3".formatted(onPillar));
+        else if (nextColumn != 0) helper.fail("Course x=0.6 (world column 1, the floor) read %d, expected 0".formatted(nextColumn));
+        else helper.succeed();
     }
 }

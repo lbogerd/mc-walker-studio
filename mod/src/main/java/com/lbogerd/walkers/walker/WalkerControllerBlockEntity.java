@@ -76,9 +76,12 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
      * Create stress impact per RPM (decision D7), from the walker's spec as in the studio:
      * legs × stressPerLegPerRpm + mass × stressPerBlockPerRpm. Zero until a walker is configured.
      */
+    /** Stress impact as last synced to this client (the client has no walker spec). */
+    private float syncedImpact;
+
     @Override
     public float calculateStressApplied() {
-        float impact = walk == null ? 0f : (float) stressImpactPerRpm(walk.spec);
+        float impact = walk == null ? syncedImpact : (float) stressImpactPerRpm(walk.spec);
         this.lastStressApplied = impact;
         return impact;
     }
@@ -88,18 +91,23 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
     }
 
     private void refreshStress() {
-        if (level != null && !level.isClientSide && hasNetwork()) getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+        if (level == null || level.isClientSide) return;
+        if (hasNetwork()) getOrCreateNetwork().updateStressFor(this, calculateStressApplied());
+        sendData(); // clients show the impact in goggle tooltips
     }
 
-    /** Override the controls with a fixed command (tests, debugging); null hands control back to the hull. */
+    /** Override the controls with a fixed command at design speed (tests, debugging); null hands control back. */
     public void setManualCommand(Scenarios.Command command) { this.manualCommand = command; }
+    private double manualTimeScale = 1;
+    /** Gait time scale while the command is overridden (default 1 = design speed). */
+    public void setManualTimeScale(double scale) { this.manualTimeScale = scale; }
     public float lastThrottle() { return lastThrottle; }
     public float lastSteer() { return lastSteer; }
 
     /**
-     * The command the hull's controls give right now (D5 + D7):
-     * throttle = Throttle Lever (0–1, full if there's none) × min(1, |RPM| / design RPM) × sign(RPM),
-     * steer = Steering Wheel (−1–1, 0 if there's none). No rotation (or an overstressed network) means no command.
+     * The command the hull's controls give right now (D5): throttle = Throttle Lever (0–1, full if there's none) ×
+     * direction, steer = Steering Wheel (−1–1, 0 if there's none). The shaft's speed doesn't scale the command; it sets
+     * the gait's time scale instead (D7, see {@link #timeScaleFromShaft}). No rotation means no command.
      * Direction is relative to the controller's facing, so it doesn't depend on which way the hull points: a Creative
      * Motor set to a positive speed on the back face walks forward. Reverse the shaft (e.g. a Gearshift) to back up.
      */
@@ -116,15 +124,25 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
         }
         float speed = getSpeed();
         if (speed == 0 || isOverStressed()) { lastThrottle = 0; lastSteer = 0; return Scenarios.Command.STOP; }
-        double designRpm = walk.spec.drive.rpm;
-        double rpmFactor = Math.min(1, Math.abs(speed) / designRpm);
         // Create's speed is about the axis' positive direction; make it relative to the facing
         var facing = getBlockState().getValue(WalkerControllerBlock.FACING);
         double forwardSign = Math.signum(speed) * (facing.getAxisDirection() == net.minecraft.core.Direction.AxisDirection.POSITIVE ? 1 : -1);
-        lastThrottle = (float) ((Float.isNaN(lever) ? 1 : lever) * rpmFactor * forwardSign);
-        lastSteer = (float) (steer * rpmFactor);
+        lastThrottle = (float) ((Float.isNaN(lever) ? 1 : lever) * forwardSign);
+        lastSteer = steer;
         return new Scenarios.Command(lastThrottle, lastSteer);
     }
+
+    /**
+     * Gait time scale from the shaft (D7): |RPM| ÷ the spec's design RPM, so the shaft drives the legs. Zero when
+     * there's no rotation or the network is overstressed (the legs stop where they are).
+     */
+    double timeScaleFromShaft() {
+        if (walk == null || isOverStressed()) return 0;
+        return Math.abs(getSpeed()) / walk.spec.drive.rpm;
+    }
+
+    /** The network stress Create reports for this block's network [SU] (tests). */
+    public float networkStress() { return stress; }
 
     private void scanControls(ServerSubLevel subLevel) {
         controlBlocks.clear();
@@ -166,7 +184,13 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
     @Override
     public void sable$tick(ServerSubLevel subLevel) {
         if (walk == null || level == null) return;
-        walk.setCommand(manualCommand != null ? manualCommand : commandFromControls(subLevel));
+        if (manualCommand != null) {
+            walk.setCommand(manualCommand);
+            walk.setTimeScale(manualTimeScale);
+        } else {
+            walk.setCommand(commandFromControls(subLevel));
+            walk.setTimeScale(timeScaleFromShaft());
+        }
         walk.tick(subLevel, level);
     }
 
@@ -269,7 +293,10 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
     @Override
     protected void write(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.write(tag, registries, clientPacket);
-        if (clientPacket) return; // clients don't need the walker state
+        if (clientPacket) { // clients only need the stress impact (goggles); not the walker state
+            tag.putFloat("StressImpact", calculateStressApplied());
+            return;
+        }
         CompoundTag s = new CompoundTag();
         s.putDouble("RideHeight", suspension.rideHeight());
         s.putDouble("Frequency", suspension.frequency());
@@ -301,7 +328,10 @@ public class WalkerControllerBlockEntity extends KineticBlockEntity implements B
     @Override
     protected void read(CompoundTag tag, HolderLookup.Provider registries, boolean clientPacket) {
         super.read(tag, registries, clientPacket);
-        if (clientPacket) return;
+        if (clientPacket) {
+            syncedImpact = tag.getFloat("StressImpact");
+            return;
+        }
         if (tag.contains("Suspension", Tag.TAG_COMPOUND)) {
             CompoundTag s = tag.getCompound("Suspension");
             suspension = new Suspension(s.getDouble("RideHeight"), s.getDouble("Frequency"), s.getDouble("Damping"),

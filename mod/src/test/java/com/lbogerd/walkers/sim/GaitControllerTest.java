@@ -74,4 +74,33 @@ class GaitControllerTest {
         }
         assertTrue(s.path().x() > 5, "walked forward");
     }
+
+    /** Live trimming keeps memory bounded over a long run and changes nothing about the results. */
+    @Test
+    void trimmedHistoryIsBoundedAndChangesNothing() throws Exception {
+        for (String id : new String[] {"quad-strider", "quad-crawler", "hexapod", "biped"}) {
+            WalkerSpec spec = walker(id);
+            GaitController full = new GaitController(spec, Scenarios.makeTerrain("rough"), Scenarios.Command.STOP, 0);
+            GaitController trimmed = new GaitController(spec, Scenarios.makeTerrain("rough"), Scenarios.Command.STOP, 0);
+            int maxHeld = 0, maxFootholds = 0;
+            for (int t = 0; t < 6000; t++) {
+                // walk, turn, stop and reverse in a repeating pattern
+                int p = (t / 300) % 4;
+                Scenarios.Command c = p == 0 ? new Scenarios.Command(1, 0) : p == 1 ? new Scenarios.Command(0.5, 0.6)
+                        : p == 2 ? Scenarios.Command.STOP : new Scenarios.Command(-0.7, -0.3);
+                GaitController.TickState a = full.tick(c), b = trimmed.tick(c);
+                if (t % 200 == 0) trimmed.trimHistory(400);
+                assertArrayEquals(a.actual().pos(), b.actual().pos(), id + " hull at tick " + t);
+                for (int li = 0; li < a.legs().size(); li++)
+                    assertArrayEquals(a.legs().get(li).foot(), b.legs().get(li).foot(), id + " foot " + li + " at tick " + t);
+                maxHeld = Math.max(maxHeld, trimmed.path().heldTicks());
+                maxFootholds = Math.max(maxFootholds, trimmed.heldFootholds());
+            }
+            assertTrue(maxHeld < 1000, id + ": planner held " + maxHeld + " ticks");
+            // between trims (every 200 ticks) each leg adds about one foothold per gait cycle
+            int bound = spec.legs.size() * (4 + (int) Math.ceil(200 / spec.gait.cycleTicks));
+            assertTrue(maxFootholds <= bound, id + ": held " + maxFootholds + " footholds (bound " + bound + ")");
+            assertTrue(full.path().heldTicks() > 6000, "untrimmed control keeps everything");
+        }
+    }
 }

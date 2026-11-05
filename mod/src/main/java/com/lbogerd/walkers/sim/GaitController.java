@@ -320,6 +320,23 @@ public final class GaitController {
         this(spec, terrain, Scenarios.Command.STOP, 0);
     }
 
+    /**
+     * Live use only (no JS counterpart): keep about {@code keepTicks} of planner history and drop footholds of
+     * stances that are long finished, so a controller running for hours stays bounded. Doesn't change any result
+     * for the ticks that follow (see GaitControllerTest).
+     */
+    public void trimHistory(int keepTicks) {
+        path.trimBefore(t - Math.max(keepTicks, (int) Math.ceil(4 * T) + warm));
+        double phase = last == null ? path.at(path.lastTick()).phase() : last.path().phase();
+        for (int i = 0; i < legs.size(); i++) {
+            int k = legAt(legs.get(i), phase).k();
+            fhCache.get(i).keySet().removeIf(kk -> kk < k - 2);
+        }
+    }
+
+    /** Footholds held per leg (for tests of {@link #trimHistory}). */
+    public int heldFootholds() { return fhCache.stream().mapToInt(Map::size).sum(); }
+
     /** The tick the next call to {@link #tick} runs. */
     public int nextTick() { return t; }
 
